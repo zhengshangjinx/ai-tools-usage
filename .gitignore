@@ -1,0 +1,57 @@
+# ============================================================================
+# AI Usage — 忽略列表
+#
+# 本项目用 XcodeGen：`project.yml` 是工程配置的唯一事实来源。
+# 下面凡是标着「生成物」的，都能用 `xcodegen generate` 原样重建。
+# ============================================================================
+
+# ---- XcodeGen 生成物 ---------------------------------------------------------
+# 两者都验证过是 `xcodegen generate` 逐字节可复现的（sha256 与重新生成后一致）。
+# 不提交是为了避免每次增删 Swift 文件都在 project.pbxproj 里产生几百行 diff ——
+# 那种 diff 没法 review，还特别容易冲突。
+# 代价：clone 之后必须先在仓库根目录跑一次 `xcodegen generate`。
+AIUsage.xcodeproj/
+AIUsage/Info.plist
+
+# ---- 构建产物 ----------------------------------------------------------------
+# scripts/build.sh 用 `-derivedDataPath build`，产物落在仓库根的 build/
+build/
+DerivedData/
+*.xcarchive
+*.ipa
+*.dSYM
+*.dSYM.zip
+*.hmap
+*.moved-aside
+
+# ---- Xcode 每用户状态 ---------------------------------------------------------
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+
+# ---- Swift Package Manager ---------------------------------------------------
+.build/
+.swiftpm/
+Package.resolved
+
+# ---- IDE ---------------------------------------------------------------------
+# .idea/ 是本机 JetBrains 的工程状态，不进仓库（换台机器就该重新生成）
+.idea/
+*.iml
+.vscode/
+
+# ---- macOS -------------------------------------------------------------------
+.DS_Store
+.AppleDouble
+.LSOpenRecentFolders
+._*
+
+# ---- 本机运行时产物（重要：别提交）---------------------------------------------
+# `defaults export com.local.aiusage xxx.v1` 导出的配置副本。里面有**本机 device.id**
+# （iCloud 同步用它认设备）与本机绝对路径，属于个人数据，不该进公开仓库。
+# 只匹配仓库根目录，不会误伤子目录里的源码。
+/*.v1
+
+# scripts/export.sh 的本机输出目录。里面有你的 iCloud 路径，属于个人配置。
+scripts/export-dir.local

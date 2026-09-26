@@ -1,0 +1,210 @@
+# AI Usage
+
+A native macOS menu bar app that reads the session logs your AI coding assistants leave on disk, and turns them into token usage and estimated cost — one long-lived ledger, across tools and machines.
+
+**English** · [简体中文](README.md)
+
+> The app's UI is currently Simplified Chinese only.
+
+There are **no UI screenshots here**: the render harness (`--render`) reads your real local logs, so anything it captures
+shows your own device names, actual spend and local paths. To see the UI, build it per "Build from source" below —
+or just run `--render <dir>` to produce a set of your own (one per appearance, light and dark).
+
+---
+
+## Why this exists
+
+If you use Claude Code, Codex, Cursor, Devin and Qoder side by side, there is no single place that answers "how much did I spend this month". Usage is scattered across each vendor's own directory, in its own format — and most of them only show you the last 30 days. Claude Code deletes local logs after 30 days by default.
+
+This app gathers those scattered logs into one ledger and solves three things:
+
+1. **See every tool at once**, instead of opening five dashboards.
+2. **The ledger outlives the logs.** Daily aggregates are written to iCloud archives. Measured on the author's machine: Codex local logs covered 38 days while the archive covered 85 — 47 days existed only in the archive.
+3. **Cost is never persisted — only tokens are.** The archive stores four token buckets; amounts are recomputed at display time from the current price table. So when prices change, historical cost is recalculated rather than frozen at an old rate.
+
+## Features
+
+| Feature | Description |
+|---|---|
+| **10 data sources** | Claude Code, Codex (Desktop / IDE / CLI), Devin, Cursor, Qoder, CodeBuddy, Windsurf, Antigravity, TRAE |
+| **Three breakdowns** | By device / by model / by day, sortable, with the table and chart linked |
+| **Cost estimation** | Pulls the LiteLLM price table automatically; unmatched models show `Unpriced` and can be priced by hand |
+| **Menu bar** | Today's / this month's cost, tokens and requests next to the icon; a panel with a 7-day mini bar chart on click |
+| **Multi-device sync** | Exchanges daily aggregate archives through iCloud Drive — no server involved |
+| **Export** | Current filtered result to CSV / TSV / JSON, with full methodological metadata |
+| **Retention report** | Per environment: how many days of local logs are left vs. how many the archive holds |
+
+## Supported data sources
+
+| Tool | Local data | How it's read |
+|---|---|---|
+| Claude Code | `~/.claude/projects/**/*.jsonl` (incl. `subagents/`) | `message.usage` of `assistant` messages, deduplicated by `message.id + requestId` |
+| Codex (Desktop / IDE) | `~/.codex/sessions/**/rollout-*.jsonl`, `~/.codex/archived_sessions/` | `last_token_usage` of each `token_count` event, consecutive duplicates counted once; parent-thread history replayed in bulk within 1s of a fork / subagent file is dropped (matching the T3 Code / ccusage convention); model from `turn_context` |
+| Codex CLI | Same, split by `session_meta.originator` | Same |
+| Devin (Desktop / CLI) | `~/.local/share/devin/cli/sessions.db` (SQLite, WAL) | `message_nodes.chat_message.metadata.metrics`, deduplicated by `message_id`, incrementally scanned by `row_id` |
+| Cursor | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` | `cursorDiskKV` rows `bubbleId:*` (type 2), `tokenCount.inputTokens/outputTokens`, cache not distinguished |
+| Qoder IDE | `~/Library/Application Support/Qoder/SharedClientCache/cache/db/local.db`, `~/.qoder/shared_client/…` | `chat_message.token_info` (prompt / completion / cached); models are mostly auto-routed → unpriced |
+| CodeBuddy Code | `~/.codebuddy/projects/**/*.jsonl` | Same format as Claude Code |
+| Windsurf | `~/.codeium/windsurf/cascade/*.pb` | **Encrypted locally** (entropy 8.0) — sessions and active days only |
+| Antigravity | `~/.gemini/antigravity*/conversations/*.pb` | **Encrypted locally** — sessions and active days only |
+| TRAE | `~/Library/Application Support/Trae*/ModularData/ai-agent/database.db` | **SQLCipher-encrypted** (key lives only in process memory) — not readable yet; a placeholder data source |
+
+Sources that can't be read are labelled "encrypted" or "not detected" — **never guessed, never counted as zero**.
+
+Token accounting is unified as:
+
+```
+processed = uncached input + cache read + cache write + output
+```
+
+(OpenAI's `input_tokens` counts cached tokens; that is subtracted automatically.)
+
+## Privacy
+
+This app reads log files that other programs wrote on your machine, so it's worth being precise about what it does:
+
+- **Everything stays local.** No account, no telemetry, no upload. Parse results are cached under `~/Library/Application Support/AIUsage/`.
+- **Exactly one outbound request in the whole project**: at launch it fetches
+  [LiteLLM's `model_prices_and_context_window.json`](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)
+  for pricing (not refetched within 6 hours). It works offline — you just keep using the cached price table.
+- **It never reads credentials.** The retention feature looks at `~/.claude/settings.json`, but reads **only the `cleanupPeriodDays` key**, pulled out with `JSONSerialization`. That file also holds credentials such as `ANTHROPIC_AUTH_TOKEN`; this app does not touch them, print them, log them, or write the file back.
+- **The app is not sandboxed** (`com.apple.security.app-sandbox = false`) — it has to read the per-vendor data directories listed above. That is also why it isn't on the App Store.
+- **Sync is file-level.** Multi-device sync goes through a directory in your own iCloud Drive and exchanges daily aggregate archives (`device-<deviceId>.json`, containing only token buckets and session counts). The archives contain **no** session ids, no prompt content, and no costs.
+- For the encrypted sources (Windsurf / Antigravity / TRAE), this app does not decrypt anything and does not attempt to bypass the encryption.
+
+## Installation
+
+### Build from source
+
+Source builds only, for now. Requires macOS 14+ and the Xcode command line tools.
+
+```bash
+brew install xcodegen          # this project is managed with XcodeGen
+git clone <this-repo> && cd ai-tools-usage
+xcodegen generate              # required — see below
+./scripts/build.sh             # Release universal binary (arm64 + x86_64)
+```
+
+The product lands in `build/Build/Products/Release/AI Usage.app`; drag it into Applications.
+
+> **`xcodegen generate` is not optional.** `AIUsage.xcodeproj/` and `AIUsage/Info.plist` are both
+> generated from `project.yml` and are not committed (so that adding or removing a Swift file doesn't
+> produce hundreds of unreviewable lines of `project.pbxproj` diff). Opening the project right after
+> cloning will fail.
+
+To work in Xcode:
+
+```bash
+xcodegen generate && open AIUsage.xcodeproj
+```
+
+Re-run `xcodegen generate` after adding Swift files.
+
+> **Exporting is opt-in.** `scripts/build.sh` builds through the scheme, and the scheme carries a
+> build post-action that runs `scripts/export.sh` to package the product into a directory.
+> It **does nothing by default**; to enable it, either use
+> `AIUSAGE_EXPORT_DIR="/path/to/dir" ./scripts/build.sh`, or write the directory into
+> `scripts/export-dir.local` (which is gitignored).
+
+The app is ad-hoc signed and not notarized, so the first launch needs a right-click → Open.
+
+## Menu bar
+
+The menu bar shows a compact string (today's cost by default). Clicking it opens a rich panel with cost, tokens and requests **split into "Today" and "This month"**, a 7-day mini bar chart, and three footer actions (open main window / refresh now / quit). Which metrics appear where is configured under Settings → Display & Retention → Menu bar (stored as `menubar.config.v1`).
+
+The two sections are separate because the windows differ — six homogeneous numbers in a row read as six metrics of the same time window.
+
+The panel reads **fixed windows** (today / this month) and does not follow the date range selected in the main window. Turning the toggle off only hides the icon; the main window and Dock icon are unaffected (**not** `LSUIElement`).
+
+## Pricing
+
+At launch the app fetches unit prices from [LiteLLM](https://github.com/BerriAI/litellm) and caches them under `~/Library/Application Support/AIUsage/` (not refetched within 6 hours). Unmatched models show `Unpriced`; you can price them by hand under Settings → **Model prices** ($ per 1M tokens). Manual prices win.
+
+Cost is **never persisted — only tokens are**. The archive stores four token buckets, and amounts are computed at display time from the then-current price table. Exports therefore carry the price table version (`pricing.lastUpdated`) — after a price change, only a matching version explains a discrepancy.
+
+## Data retention
+
+**Claude Code keeps local logs for only 30 days by default** (`cleanupPeriodDays`; unset on the author's machine). This app's iCloud archive is untouched by that — those days may be long gone from local logs while still present in the archive.
+
+Settings → Display & Retention lays this out per environment (local logs X days / archive Y days / N days archive-only) and suggests `370`, with a copyable JSON snippet. **The app will not edit `~/.claude/settings.json` for you** — that file holds credentials, and we read only the one `cleanupPeriodDays` key and never write back.
+
+One honest caveat: **the archive only covers days since it started observing.** Logs that were already cleaned up before you installed this app cannot be recovered.
+
+## Export
+
+The export button (`square.and.arrow.up`) at the right of the main window's filter bar saves the **current filtered result** as CSV / TSV / JSON. What you export is the table you're looking at: same rows, same order, same share basis — rows come from `UsageStore.visibleRows`, the same source the table uses.
+
+- CSV / TSV carry a UTF-8 BOM, CRLF line endings and RFC 4180 escaping — otherwise Excel renders columns like `claude-sonnet-5（日常使用）` as mojibake.
+- Numbers are always raw values and dates use ASCII `yyyy-MM-dd`, **not** the UI formatting (`Formatters.tokens` would produce `12.4M`; human-readable is not machine-readable).
+- `null` ≠ `0`: unmeasurable request counts are left empty (with `requests_partial` saying "this is a lower bound"), unpriced cost is left empty (`cost_partial=true`), and incomplete components are reported honestly as `unclassified_tokens` — **never guessed as input**.
+- JSON additionally carries `meta` (export time, app version, breakdown, date range, filters, sorting, **price table version**) plus per-row `tokens_components` and `prices`.
+- It writes only to the path you choose and never auto-writes into the iCloud sync directory (that belongs to the device archives).
+
+## Command-line checks
+
+Every number in the UI has a machine-readable outlet. Each flag performs a **real scan of local logs** (the same data the UI uses), prints, and calls `exit(0)`:
+
+```bash
+APP="build/Build/Products/Release/AI Usage.app/Contents/MacOS/AI Usage"
+
+"$APP" --dump 7            # summary for the last 7 days (a bare integer — see below)
+"$APP" --menu              # the menu bar panel's numbers: today / this month / last 7 days
+"$APP" --retention         # retention: local logs vs. iCloud archive coverage, cleanupPeriodDays
+"$APP" --selftest          # parsing / aggregation / cross-device schema / export / retention; exit 0 when green
+"$APP" --render /tmp/r     # main window, settings, menu panel — one PNG each for light and dark
+"$APP" --bench             # re-rasterizes the whole page and reports the median
+"$APP" --export /tmp/x csv model   # export without touching the UI (omit format and breakdown for 3×3 = 9 files)
+```
+
+| Flag | Effect |
+|---|---|
+| `--dump [days]` | Prints the summary, 90 days by default. **Pass a bare integer**: `--dump 7`. `--dump "7 days"` doesn't error but **silently does nothing** — it parses with `Int($0)` and falls back to 90 days when that fails |
+| `--menu` | Menu bar summary (fixed windows: today / this month / last 7 days), plus a final `label:` line — the string actually shown in the menu bar, assembled from your configuration. Matching numbers don't mean the string is right: defects like `今日 $ $16.86` are only visible once the assembled string is printed |
+| `--retention` | Retention table. Prints the `cleanupPeriodDays` value **only** and touches nothing else in `~/.claude/settings.json` |
+| `--selftest` | 156 assertions; non-zero exit on failure |
+| `--render <dir>` | Offscreen snapshots (views backed by AppKit — `TextEditor`, `Form`, `Menu` — go through a real `NSWindow`, see `RenderHarness.captureWindow`; views whose height follows their content measure themselves, see `captureFitting`) |
+| `--bench` | Median rasterization time for the main window |
+| `--export <dir> [csv\|tsv\|json] [device\|model\|day]` | Export in three formats per breakdown, byte-for-byte checkable |
+
+`--selftest`'s red lines: it **never touches `ScanCache.shared`** (which reads, writes and prunes cache files under `~/Library/Application Support/AIUsage/`) and never writes `UserDefaults`. Parsing cases use synthetic fixtures in temp directories, deleted afterwards, with no network access (prices are injected as fixed values).
+
+## Caching
+
+Parse results are cached by file `(path, size, mtime)` in `~/Library/Application Support/AIUsage/scan_cache_v3.json`. The first full scan takes about ten seconds; later refreshes parse only changed files. Settings → Data sources has "Clear cache and rescan".
+
+## Project layout
+
+```
+AIUsage/
+├── App.swift                  App entry, the three scenes, offscreen render harness (--render / --bench)
+├── SelfTest.swift             Every --selftest assertion
+├── Providers/                 Per-source parsers, scan cache, SQLite reader
+├── Store/UsageStore.swift     The single source of truth for aggregation, filtering, sorting
+├── Pricing/                   LiteLLM price table, manual overrides
+├── Sync/DeviceSync.swift      Reading, writing and merging iCloud archives
+├── Retention/                 Retention report
+├── Export/                    CSV / TSV / JSON export
+├── MenuBar/                   Menu bar configuration and panel
+├── Views/                     Main window and components
+└── Util/                      Formatting, theme tokens
+scripts/
+├── build.sh                   One-shot Release universal build
+├── export.sh                  Optional packaging export (skipped by default)
+└── export-dir.local           Local export directory (not committed)
+project.yml                    The single source of truth for the project (XcodeGen)
+```
+
+## Known limitations
+
+- **The UI is Simplified Chinese only**; no localization has been done.
+- **Windsurf / Antigravity / TRAE expose no tokens**: their local data is encrypted, so only session counts and active days are reported.
+- **Costs are estimates**, computed from LiteLLM's public price table. Subscriptions, credit packs and enterprise discounts are not modelled.
+- **Multi-device sync is "each device writes its own archive"** with no conflict resolution — changing a device's id leaves two archives side by side. By design, sessions never overlap across devices, so summing by day is correct.
+- **Tested only on macOS 14+**; a universal binary is produced but Intel has not been verified on real hardware.
+
+## License
+
+[MIT](LICENSE) © 2026 zhengshangjinx
+
+Price data comes from [LiteLLM](https://github.com/BerriAI/litellm) (MIT).
+This project is not affiliated with, authorized by, or endorsed by Anthropic, OpenAI, Cursor, Devin or any other AI vendor.
