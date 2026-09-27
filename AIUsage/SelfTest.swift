@@ -15,9 +15,13 @@ import Foundation
 ///    拿 fixture 跑一遍公开的 `scan(paths:)` 就会污染甚至误删用户的真实缓存。
 ///    所以解析器的断言一律直接调 `scanFile(_:)`（为此把两个 provider 的 `scanFile`
 ///    从 private 提到了 internal，**只动可见性、没动逻辑**），fixture 建在临时目录里、跑完自删。
-/// 2. **绝不写 UserDefaults。** 尤其 `PricingService.overrides` 带
-///    `didSet { saveOverrides() }`：给它赋个测试价就等于覆盖用户手填的单价。
-///    这里全程只读，需要确定价格的地方用 `ModelPrice` 这个纯值类型自己构造。
+/// 2. **绝不写 `UserDefaults.standard`，也绝不写用户配置所在的任何域。** 尤其
+///    `PricingService.overrides` 带 `didSet { saveOverrides() }`：给它赋个测试价就等于覆盖用户手填的单价。
+///    需要验读写的设置项（第 8 组的 `AppBehaviorSettings`）走**注入的一次性 suite**
+///    —— `UserDefaults(suiteName: "aiusage.selftest.<UUID>")`，跑完 `removePersistentDomain` 拆掉，
+///    它与 App 的配置域没有任何关系。**不许为了方便直接 `AppBehaviorSettings()`**：那会拿到
+///    `.standard`，写一下就把用户设置改了，而且是**静默**改（这一组恰好就是在验写入）。
+///    其余全程只读，需要确定价格的地方用 `ModelPrice` 这个纯值类型自己构造。
 ///
 /// `@MainActor`：`PricingService` 上的纯函数（如 `candidates(for:)`）是主线程隔离的，
 /// 而整个自测本来就在 `applicationDidFinishLaunching` 里同步跑，隔离在同一处，不需要跨线程。
@@ -63,6 +67,7 @@ enum SelfTest {
         testExport()
         testRetention()
         testMenuBarLabel()
+        testWindowLifecycle()
         print("\n" + String(repeating: "─", count: 46))
         if failures.isEmpty {
             print("自测通过：\(passes) 项断言全部成立")
@@ -660,6 +665,107 @@ enum SelfTest {
         partial.today.requestsPartial = true
         cfg.label = [.todayRequests]
         equal("只有下界时仍写「—」（0 次和数不出来是两回事）", cfg.labelText(partial), "今日请求 —")
+    }
+
+    // MARK: 8. 生命周期与关窗行为
+
+    /// 「关掉主窗口之后 Dock 图标该不该消失」这条线的判据。
+    ///
+    /// 为什么非要离屏钉住它：活的那条路径读的是 `NSApp.windows`，而**这个环境里启动路径建不出窗口**
+    /// （从终端跑二进制或 `open -a` 都只得到 `active=0`），也就是说这条线在本机根本没法稳定复现。
+    /// 判据是纯函数，正好把它按住 —— 挑错一个 `canBecomeMain`，症状是「点一下菜单栏图标 Dock 图标就冒出来」，
+    /// 肉眼极难归因。
+    private static func testWindowLifecycle() {
+        group("8. 生命周期与关窗行为")
+
+        typealias Snap = ActivationPolicyController.WindowSnapshot
+
+        // 判据：屏幕上还有没有「真窗口」
+        expect("一个窗口都没有 → 没有真窗口", !ActivationPolicyController.hasRealWindow([]))
+
+        let panel = Snap(isVisible: true, isMiniaturized: false, canBecomeMain: false)
+        expect("菜单栏面板那种窗口不算数（canBecomeMain=false）",
+               !ActivationPolicyController.hasRealWindow([panel]),
+               "漏掉这条：点一下菜单栏图标 Dock 图标就会被招回来")
+
+        let main = Snap(isVisible: true, isMiniaturized: false, canBecomeMain: true)
+        expect("主窗口算数", ActivationPolicyController.hasRealWindow([main]))
+
+        // 本项目比日历多算的一条 —— 少了它，主窗口缩到 Dock 之后关掉设置窗口会让 Dock 图标消失，
+        // 而主窗口还挂在 Dock 里点不开
+        let mini = Snap(isVisible: false, isMiniaturized: true, canBecomeMain: true)
+        expect("**最小化的主窗口算数**（缩到 Dock 之后 isVisible 会变 false）",
+               ActivationPolicyController.hasRealWindow([mini]),
+               "漏掉这条：Dock 图标会在窗口还在时消失，且那个窗口点不开")
+
+        let hidden = Snap(isVisible: false, isMiniaturized: false, canBecomeMain: true)
+        expect("藏起来的普通窗口不算数", !ActivationPolicyController.hasRealWindow([hidden]))
+        expect("藏起来的窗口旁边有真窗口时仍算有", ActivationPolicyController.hasRealWindow([hidden, main]))
+
+        // 关窗决策。四种参数组合都要断，尤其「关的不是主窗口」那一列
+        equal("关主窗口 + 不保留 → 退出",
+              ActivationPolicyController.closeOutcome(isMainWindow: true, keepRunning: false, hasMenuBarIcon: true), .terminate)
+        equal("关主窗口 + 保留 + 有菜单栏图标 → 重新判形态",
+              ActivationPolicyController.closeOutcome(isMainWindow: true, keepRunning: true, hasMenuBarIcon: true), .refresh)
+        // 死路兜底：菜单栏图标也没了，再退成纯状态栏就三个入口全无
+        equal("关主窗口 + 保留 + 没有菜单栏图标 → 留在 Dock",
+              ActivationPolicyController.closeOutcome(isMainWindow: true, keepRunning: true, hasMenuBarIcon: false), .stayInDock)
+
+        for keep in [true, false] {
+            for icon in [true, false] {
+                let outcome = ActivationPolicyController.closeOutcome(isMainWindow: false, keepRunning: keep, hasMenuBarIcon: icon)
+                expect("关非主窗口（保留=\(keep), 图标=\(icon)）绝不退出", outcome != .terminate,
+                       "得到 \(outcome)：「关个设置窗口把 App 带走」就是这类实现最常见的事故")
+            }
+        }
+
+        testBehaviorSettings()
+    }
+
+    /// 关窗行为这个设置项的读写。
+    ///
+    /// 用**注入的一次性 suite**，不是 `.standard` —— 这一组验的就是写入，拿 `.standard` 跑一遍
+    /// 等于把用户自己选的关窗行为改掉，而且是静默改。跑完把整个域拆掉。
+    ///
+    /// 最有价值的是「`removeObject` 之后读回 `true`」那条：它直接钉住实现里那个
+    /// `object(forKey:) as? Bool ?? true`。写成 `bool(forKey:)` 的话「从没设过」和「设成 false」
+    /// 分不出来，症状是**开关永远打不开**（默认值恰好是 true，一改成 false 就再也回不去）。
+    private static func testBehaviorSettings() {
+        let suite = "aiusage.selftest.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suite) else {
+            expect("能开出一次性 suite", false, suite)
+            return
+        }
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            // 光 `removePersistentDomain` 不够：它把里面清空成一份**空 plist**，
+            // 文件本身留在 `~/Library/Preferences/` 里。每跑一次自测留一个空文件，
+            // 用户那个目录会越积越多（一次开发里跑几十遍很正常）。这里把壳也扫掉。
+            let plist = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Preferences/\(suite).plist")
+            try? FileManager.default.removeItem(at: plist)
+        }
+
+        func fresh() -> AppBehaviorSettings { AppBehaviorSettings(defaults: defaults) }
+
+        expect("全新配置 → 默认保留在菜单栏", fresh().keepRunningAfterMainWindowClose)
+
+        fresh().keepRunningAfterMainWindowClose = false
+        expect("写 false 之后读回 false（同一个 suite）", !fresh().keepRunningAfterMainWindowClose)
+
+        defaults.removeObject(forKey: AppBehaviorSettings.keepRunningKey)
+        expect("**removeObject 之后读回 true**（这条钉的是 `object(forKey:) as? Bool`）",
+               fresh().keepRunningAfterMainWindowClose,
+               "写成 bool(forKey:) 的话这里会得到 false —— 开关一旦关掉就再也打不开")
+
+        // 显式写 true 再读，跟「没设过」走的是同一条默认路径，但写盘确实发生了
+        fresh().keepRunningAfterMainWindowClose = true
+        equal("写 true 之后磁盘上确实是 true",
+              defaults.object(forKey: AppBehaviorSettings.keepRunningKey) as? Bool, true)
+
+        // 键盘名一旦改动，老用户的设置会被静默丢弃 —— 键名是有用户数据挂在上面的事实来源
+        equal("键名不许随手改（改它等于清空所有用户的这个设置）",
+              AppBehaviorSettings.keepRunningKey, "general.keepRunningAfterMainWindowClose.v1")
     }
 
     // MARK: 工装

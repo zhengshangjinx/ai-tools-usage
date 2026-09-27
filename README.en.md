@@ -114,7 +114,22 @@ The menu bar shows a compact string (today's cost by default). Clicking it opens
 
 The two sections are separate because the windows differ — six homogeneous numbers in a row read as six metrics of the same time window.
 
-The panel reads **fixed windows** (today / this month) and does not follow the date range selected in the main window. Turning the toggle off only hides the icon; the main window and Dock icon are unaffected (**not** `LSUIElement`).
+The panel reads **fixed windows** (today / this month) and does not follow the date range selected in the main window.
+
+Turning "Show in menu bar" off only hides the icon. **The Dock icon is a separate mechanism**: when no real window
+is on screen the app drops to a menu-bar-only process (Dock icon and menu bar go away together) and comes back
+when a window is opened again. Settings has a "keep running after closing the main window" toggle; turning it off
+makes closing the window quit the app. There is still **no** `LSUIElement` key — this app opens its main window at
+launch (so it starts out `.regular`), and "menu-bar-only" only ever arises from closing the last window, which is a
+runtime transition; a static declaration would only add a flip at launch plus two known pitfalls. The reasoning
+lives at the top of `ActivationPolicyController`.
+
+One residual risk, stated plainly: on macOS 26 and later a user can remove this app's icon from
+System Settings → Menu Bar, and the app can only read its own preference, not that system-side state — it will
+wrongly conclude it may drop to menu-bar-only. Reopening the app from Applications recovers it (via
+`applicationShouldHandleReopen`). Also, if you turn the menu bar icon off *and* keep "stay running", the app would
+have no entry point at all, so that combination deliberately does **not** drop to menu-bar-only — the Dock icon
+stays, and Settings shows an orange warning to that effect.
 
 ## Pricing
 
@@ -161,12 +176,18 @@ APP="build/Build/Products/Release/AI Usage.app/Contents/MacOS/AI Usage"
 | `--dump [days]` | Prints the summary, 90 days by default. **Pass a bare integer**: `--dump 7`. `--dump "7 days"` doesn't error but **silently does nothing** — it parses with `Int($0)` and falls back to 90 days when that fails |
 | `--menu` | Menu bar summary (fixed windows: today / this month / last 7 days), plus a final `label:` line — the string actually shown in the menu bar, assembled from your configuration. Matching numbers don't mean the string is right: defects like `今日 $ $16.86` are only visible once the assembled string is printed |
 | `--retention` | Retention table. Prints the `cleanupPeriodDays` value **only** and touches nothing else in `~/.claude/settings.json` |
-| `--selftest` | 156 assertions; non-zero exit on failure |
+| `--selftest` | 174 assertions; non-zero exit on failure |
 | `--render <dir>` | Offscreen snapshots (views backed by AppKit — `TextEditor`, `Form`, `Menu` — go through a real `NSWindow`, see `RenderHarness.captureWindow`; views whose height follows their content measure themselves, see `captureFitting`) |
 | `--bench` | Median rasterization time for the main window |
 | `--export <dir> [csv\|tsv\|json] [device\|model\|day]` | Export in three formats per breakdown, byte-for-byte checkable |
 
-`--selftest`'s red lines: it **never touches `ScanCache.shared`** (which reads, writes and prunes cache files under `~/Library/Application Support/AIUsage/`) and never writes `UserDefaults`. Parsing cases use synthetic fixtures in temp directories, deleted afterwards, with no network access (prices are injected as fixed values).
+`--selftest`'s red lines: it **never touches `ScanCache.shared`** (which reads, writes and prunes cache files under
+`~/Library/Application Support/AIUsage/`) and **never writes `UserDefaults.standard`, nor any domain holding user
+configuration**. Parsing cases use synthetic fixtures in temp directories, deleted afterwards, with no network access
+(prices are injected as fixed values). The one group that does need to exercise reads and writes (window-close behaviour)
+uses a **throwaway suite** (`UserDefaults(suiteName: "aiusage.selftest.<UUID>")`, removed along with its backing file
+afterwards) that has nothing to do with the app's configuration domain — `defaults read com.local.aiusage` must be
+byte-identical before and after a self-test run.
 
 ## Caching
 

@@ -122,7 +122,19 @@ App 是 ad-hoc 签名、未做公证，首次打开需要右键 →「打开」�
 两段分开是因为窗口不同 —— 六行同质的数排在一起，读者会以为它们是同一个时间窗里的六个指标。
 
 面板读的是**固定窗口**（今日 / 本月），不跟随主窗口选的日期范围 ——
-在主窗口选「近 90 天」不会让菜单栏跟着变。关掉开关只是不显示图标，主窗口与 Dock 图标照旧（**不是** `LSUIElement`）。
+在主窗口选「近 90 天」不会让菜单栏跟着变。
+
+关掉「在菜单栏显示」只是不显示图标。**Dock 图标是另一套逻辑**：屏幕上没有真窗口时 App 会退成纯状态栏
+（Dock 图标与菜单栏一起收掉），再从菜单栏面板打开窗口时临时出现；设置里有「关闭主窗口后保留在菜单栏」，
+关掉它就变成关窗即退出。仍然**没有**开 `LSUIElement` ——
+本 App 启动就有窗口（出生即 `.regular`），「纯状态栏」只在关掉最后一个窗口之后出现，那是运行期切换的活，
+静态声明只会让启动多一次翻转还搭上两个已知坑，理由写在 `ActivationPolicyController` 开头。
+
+一个残余风险，如实写在这里：macOS 26 起用户可以在「系统设置 → 菜单栏」里关掉本 App 的图标，
+而本 App 只能读自己的配置、读不到系统那一侧的状态，会误判成「可以退成纯状态栏」。
+这时从「应用程序」里重新打开一次即可（走 `applicationShouldHandleReopen`）。
+另外，如果同时关掉菜单栏图标、又保留「关窗不退出」，App 会变成没有任何入口 —— 这一格刻意不让它退成纯状态栏，
+Dock 图标会保留，设置页里也有对应的橙色提示。
 
 ## 价格
 
@@ -177,14 +189,16 @@ APP="build/Build/Products/Release/AI Usage.app/Contents/MacOS/AI Usage"
 | `--dump [天数]` | 打印汇总，默认 90 天。**天数写裸整数**：`--dump 7`。写成 `--dump "7 days"` 不报错但**不生效** —— 解析用的是 `Int($0)`，解析不出来就一声不响地退回 90 天 |
 | `--menu` | 菜单栏摘要（固定窗口：今日 / 本月 / 近 7 天），末尾另打一行 `label:` —— 那是菜单栏上**真正显示的那行字**（由你的配置拼出来）。数字对得上不等于那行字对：「今日 $ $16.86」这种拼写毛病只有把拼好的串打出来才看得见 |
 | `--retention` | 留存对照表。只打印 `cleanupPeriodDays` 这**一个**值，不碰 `~/.claude/settings.json` 里的其它内容 |
-| `--selftest` | 156 条断言，失败退出码非 0 |
+| `--selftest` | 174 条断言，失败退出码非 0 |
 | `--render <目录>` | 离屏快照（`TextEditor` / `Form` / `Menu` 这类 AppKit 承载的视图走真实 `NSWindow` 抓图，见 `RenderHarness.captureWindow`；高度由内容决定的视图自己量，见 `captureFitting`） |
 | `--bench` | 主界面光栅化耗时中位数 |
 | `--export <目录> [csv\|tsv\|json] [device\|model\|day]` | 按维度导出三种格式，逐字节可核对 |
 
 `--selftest` 的红线：**绝不碰 `ScanCache.shared`**（它读写并会清理 `~/Library/Application Support/AIUsage/`
-下的缓存文件），也绝不写 `UserDefaults`。解析用例全部用临时目录里的合成 fixture，跑完自删，且不联网
-（价格直接注入固定值）。
+下的缓存文件），**绝不写 `UserDefaults.standard`，也绝不写用户配置所在的任何域**。解析用例全部用临时目录里的合成 fixture，
+跑完自删，且不联网（价格直接注入固定值）。需要验读写的设置项（关窗行为那一组）走**一次性 suite**
+（`UserDefaults(suiteName: "aiusage.selftest.<UUID>")`，跑完连域带壳一起删掉），与 App 的配置域没有关系 ——
+跑自测前后 `defaults read com.local.aiusage` 应当逐字节一致。
 
 ## 缓存
 

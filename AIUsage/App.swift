@@ -86,16 +86,22 @@ struct AIUsageApp: App {
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: WindowFrameKeeper.designSize.width, height: WindowFrameKeeper.designSize.height)
 
-        // 常驻菜单栏。`isInserted` 直接绑配置里的开关：关掉只是不显示，
-        // 主窗口与 Dock 图标照旧（**不加 `LSUIElement`** —— 那会把 Dock 图标一起去掉，是另一个功能）。
+        // 常驻菜单栏。`isInserted` 直接绑配置里的开关：关掉只是不显示图标。
+        // Dock 图标是另一套逻辑：**屏幕上没有真窗口时 App 会退成纯状态栏**（Dock 图标与菜单栏一起收掉），
+        // 再打开窗口时临时出现 —— 由 `ActivationPolicyController` 按「还有没有真窗口」决定。
+        // **仍然不加 `LSUIElement`**：本 App 启动就开主窗口（出生即 `.regular`），「纯状态栏」这个状态
+        // 只有「关掉最后一个真窗口」一个来源，静态声明只会让启动多一次翻转，还搭上两个已知坑
+        // （理由全文在 `ActivationPolicyController` 开头）。
         MenuBarExtra(isInserted: $menuBar.config.showInMenuBar) {
             MenuBarPanel(store: store, settings: menuBar)
                 .environmentObject(store)
                 .environmentObject(pricing)
         } label: {
             // 标签单独抽成一个视图：它要跟着 `menuBarSummary` 刷新，
-            // 直接在 scene 那一层读 store 是不保证重画的
+            // 直接在 scene 那一层读 store 是不保证重画的。
+            // 顺带在这里交出「打开主窗口」的能力：标签全程常驻，是最靠得住的注册点。
             MenuBarLabel(store: store, settings: menuBar)
+                .bridgeOpenMainWindow()
         }
         .menuBarExtraStyle(.window)
 
@@ -104,6 +110,7 @@ struct AIUsageApp: App {
                 .environmentObject(store)
                 .environmentObject(pricing)
                 .environmentObject(menuBar)
+                .environmentObject(behavior)
         }
     }
 }
@@ -138,6 +145,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             RenderHarness.bench(store: store, pricing: pricing)
         }
     }
+
+    /// 用户又点了一次这个 App（从「应用程序」、Spotlight、`open -a`，或者 Dock 图标 —— 后者只在
+    /// App 还是 `.regular` 时有）。App 退成纯状态栏之后它不在 Dock 里，这条路是把它叫回来的主要入口。
+    ///
+    /// 为什么必须显式接下这件事：关掉主窗口后 App 是辅助型、一个窗口都没有，
+    /// 系统那边「重新激活」不一定能把窗口弄出来 —— 接一下才有确定行为。
+    /// `activateForWindow()` **必须在开窗之前**调：`.accessory` 状态下 `makeKeyAndOrderFront`
+    /// 拿不到键盘焦点，先开窗再改策略，开出来的窗口是死的（⌘W 都不响应）。
+    ///
+    /// 已经有窗口可见时就直接认下、什么都不做 —— 这时用户要的是「切回这个 App」，
+    /// 系统已经替我们激活了，再开一个窗口是多余的。
+    ///
+    /// **`applicationShouldTerminateAfterLastWindowClosed` 不实现**（默认 false）：返回 true 的话
+    /// 关掉设置窗口也会把整个 App 杀掉，与「关掉主窗口后留在菜单栏」直接冲突。
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        guard !hasVisibleWindows else { return true }
+        ActivationPolicyController.activateForWindow()
+        // 桥没交出来（理论上不会：主窗口启动就出现，`ContentView.onAppear` 必然跑过一次）时
+        // 至少把 App 激活、形态补回去，不假装开了窗。
+        WindowLifecycle.openMainWindow?()
+        return true
+    }
 }
 
 /// 离屏渲染快照（`--render <目录>`）：把主界面与设置页在浅色/深色两种外观下各出一张 PNG。
@@ -154,6 +183,9 @@ enum RenderHarness {
         // 在工装里改它等于把用户自己设的菜单栏指标覆盖掉。要核对别的组合，
         // 就在界面上改（那是用户自己的选择），不要在这里造。
         let menuBar = MenuBarSettings()
+        // 设置页要读关窗行为那个开关，缺了它会直接崩（`@EnvironmentObject` 取不到就 fatalError）。
+        // 同样只能用默认值：这个对象也是 `didSet` 就写 UserDefaults。
+        let behavior = AppBehaviorSettings()
         // Form / TextEditor 这类 AppKit 承载的控件只认 NSAppearance、不认 \.colorScheme 环境值，
         // 两种外观都要设：环境值管 SwiftUI 自绘，NSApp.appearance 管 AppKit 控件。
         // 主体不能套 ScrollView —— 懒加载内容不会进离屏快照，所以直接用 DashboardBody。
@@ -175,11 +207,11 @@ enum RenderHarness {
             // 原因是 `Form { }.formStyle(.grouped)` 由 AppKit 承载、按需铺排，`ImageRenderer`
             // 拿不到它的内容；跟 `TabView` 无关（当时那句注释把责任记错了）。
             // 现在改成真挂一个 NSWindow 再 cache 出来，`Form` 才画得出来。
-            await captureWindow(SettingsView().environmentObject(store).environmentObject(pricing).environmentObject(menuBar).environment(\.colorScheme, scheme),
+            await captureWindow(SettingsView().environmentObject(store).environmentObject(pricing).environmentObject(menuBar).environmentObject(behavior).environment(\.colorScheme, scheme),
                                 size: CGSize(width: 680, height: 620), to: "\(dir)/settings-\(name).png")
             // 单个页签各出一张：设置窗口只有 680 宽，一屏只看得到一个页签，
             // 而 TabView 的一屏到底停在哪个页签上是运行期状态，不能指望
-            await captureWindow(DeviceSyncSettings().environmentObject(store).environmentObject(pricing).environmentObject(menuBar).environment(\.colorScheme, scheme),
+            await captureWindow(DeviceSyncSettings().environmentObject(store).environmentObject(pricing).environmentObject(menuBar).environmentObject(behavior).environment(\.colorScheme, scheme),
                                 size: CGSize(width: 680, height: 620), to: "\(dir)/settings-devices-\(name).png")
             // 留存那一页的行数随环境数走，620 是设置窗口的高度、内容更高就自己滚，
             // 快照只核对「看得见的那一屏」排版对不对。
@@ -188,7 +220,7 @@ enum RenderHarness {
             let retention = RetentionReport.make(records: store.records,
                                                  deviceFiles: store.deviceSync.readAll().files)
             await captureWindow(DisplaySettings(injectedReport: retention)
-                        .environmentObject(store).environmentObject(pricing).environmentObject(menuBar).environment(\.colorScheme, scheme),
+                        .environmentObject(store).environmentObject(pricing).environmentObject(menuBar).environmentObject(behavior).environment(\.colorScheme, scheme),
                     size: CGSize(width: 680, height: 620), to: "\(dir)/settings-display-\(name).png")
             // 菜单栏那张富面板本身是普通视图，直接渲染就能核对排版。
             // 高度不写死，让工装自己量（面板有几行、开了几个区块都会影响高度）。

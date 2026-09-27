@@ -370,6 +370,9 @@ struct PricingSettings: View {
 struct DisplaySettings: View {
     @EnvironmentObject var store: UsageStore
     @EnvironmentObject var menuBar: MenuBarSettings
+    /// 关窗行为。它归在「菜单栏」这一节里，因为两者是耦合的：菜单栏图标是关掉主窗口之后
+    /// **唯一的入口**，所以图标关掉时那条「退成纯状态栏」的路必须让开（见下面那行橙色提示）。
+    @EnvironmentObject var behavior: AppBehaviorSettings
 
     /// 工装注入用。`ImageRenderer` **不会跑 `.task`**，不注入的话离屏快照只能拍到
     /// 「正在统计…」那个占位，这一页的排版就没法核对了。
@@ -563,6 +566,17 @@ struct DisplaySettings: View {
     private var menuBarSection: some View {
         Section {
             Toggle("在菜单栏显示", isOn: $menuBar.config.showInMenuBar)
+            Toggle("关闭主窗口后保留在菜单栏", isOn: $behavior.keepRunningAfterMainWindowClose)
+            // 两个开关本身是对的，凑在一起却会撞出一条死路：图标关掉、关窗又不退出，
+            // App 就变成「没有 Dock 图标、没有菜单栏、没有窗口」，只能去活动监视器杀。
+            // 这里如实说出来（行为取「不让 App 变成点不到的状态」那一侧，见 ActivationPolicyController.closeOutcome），
+            // 而不是默默替他决定。
+            if !menuBar.config.showInMenuBar && behavior.keepRunningAfterMainWindowClose {
+                Label("菜单栏图标已关掉：这时关掉主窗口不会退出，Dock 图标会保留 —— 否则这个 App 就没有任何入口了。",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(Theme.statusWarning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             MetricPicker(title: "菜单栏文字",
                          note: "最多 \(MenuBarConfig.maxLabelItems) 项 —— 菜单栏是所有 App 共享的一条，排太多会把别人的图标挤走。一项都不选就只留图标。",
                          limit: MenuBarConfig.maxLabelItems,
@@ -574,7 +588,12 @@ struct DisplaySettings: View {
         } header: {
             Text("菜单栏")
         } footer: {
-            Text("关掉只是不显示菜单栏图标，主窗口与 Dock 图标照常（没有开 LSUIElement）。菜单栏与面板里的数都是固定窗口（今日 / 本月 / 近 7 天），**不跟随主窗口选的日期范围** —— 点一下菜单栏就把主窗口的日期范围改掉，那是劫持。")
+            // 两段分成两个 Text，不用 `\n\n` 拼：footer 是 LocalizedStringKey，换行在 markdown
+            // 解析里是「软换行」，拼出来的段落间距不由我们说了算。
+            VStack(alignment: .leading, spacing: 6) {
+                Text("关掉「在菜单栏显示」只是不显示图标。Dock 图标是另一套逻辑：**屏幕上没有真窗口时 App 会退成纯状态栏**（Dock 图标与菜单栏一起收掉），再打开窗口时临时出现。仍然**没有**开 LSUIElement —— 本 App 启动就有窗口，静态声明只会让启动多一次翻转，理由见 ActivationPolicyController。")
+                Text("菜单栏与面板里的数都是固定窗口（今日 / 本月 / 近 7 天），**不跟随主窗口选的日期范围** —— 点一下菜单栏就把主窗口的日期范围改掉，那是劫持。")
+            }
         }
     }
 

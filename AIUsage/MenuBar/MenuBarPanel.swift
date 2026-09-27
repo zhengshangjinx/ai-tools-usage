@@ -247,9 +247,12 @@ struct MenuBarPanel: View {
             }
             Spacer(minLength: 0)
             PrimaryActionButton(icon: "macwindow", help: "打开主窗口") {
+                // 顺序不能换：App 退成纯状态栏之后是 `.accessory`，那个形态下 `makeKeyAndOrderFront`
+                // 拿不到键盘焦点 —— 先开窗再改策略，开出来的窗口是死的（⌘W 都不响应）。
+                // `activateForWindow()` 里已经含 `NSApp.activate(ignoringOtherApps:)`
+                // （菜单栏点出来的窗口不会自己抢焦点，不激活的话它开在别的窗口后面），别在这里再写一遍。
+                ActivationPolicyController.activateForWindow()
                 openWindow(id: "main")
-                // 菜单栏点出来的窗口不会自己抢焦点，不激活的话它开在别的窗口后面
-                NSApp.activate(ignoringOtherApps: true)
             }
             Spacer(minLength: 0)
             PanelIconButton(icon: "arrow.clockwise", help: "立即刷新", disabled: store.isScanning) {

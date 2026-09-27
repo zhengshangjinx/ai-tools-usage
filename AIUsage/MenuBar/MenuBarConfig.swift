@@ -89,8 +89,12 @@ enum MenuBarMetric: String, Codable, CaseIterable, Identifiable {
 /// 菜单栏配置。存 `UserDefaults` 的 `menubar.config.v1`（JSON Data），
 /// 照 `sources.config.v1` / `pricing.overrides.v1` 那套带版本号的键来，不另起一套。
 struct MenuBarConfig: Codable, Equatable {
-    /// 关掉只是不显示菜单栏图标，主窗口与 Dock 图标照旧 ——
-    /// **不加 `LSUIElement`**，那会把 Dock 图标一起去掉，是另一个功能。
+    /// 关掉只是不显示菜单栏图标。Dock 图标由 `ActivationPolicyController` 按
+    /// 「屏幕上还有没有真窗口」在运行期决定，**仍然不加 `LSUIElement`**（理由见那个类型开头）。
+    ///
+    /// 它与 `AppBehaviorSettings.keepRunningAfterMainWindowClose` **耦合**，改这个字段时要一起想：
+    /// 菜单栏图标是关掉主窗口之后唯一的入口，所以图标关掉时那条「退成纯状态栏」的路必须让开，
+    /// 否则 App 会落到「没有 Dock 图标、没有菜单栏、没有窗口」的死路上。
     var showInMenuBar = true
     /// 菜单栏图标旁边那段文字显示哪几项。最多两项：菜单栏长度是所有 app 共享的，
     /// 排到第三项就会把别人的图标挤走。

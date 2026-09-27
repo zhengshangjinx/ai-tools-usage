@@ -83,16 +83,62 @@ extension WindowFrameKeeper {
             super.viewDidMoveToWindow()
             guard let window, !applied else { return }
             applied = true
+
+            // **「再次打开主窗口时宽度闪跳」就是在这里治的。**
+            // 窗口是 SwiftUI 建的：它先按自己的尺寸（`.defaultSize`，或者它那条自存记录）把窗口
+            // 摆出来、推上屏幕，我们才有机会在 `viewDidMoveToWindow` 里改成用户的尺寸 ——
+            // 于是用户看到「先一个宽度、再跳成另一个」。快的时候几毫秒内就落定、察觉不到，
+            // 主线程忙的时候（比如重开时刚好在扫日志）能拖出好几帧，所以它时有时无 ——
+            // 这正是「闪跳」的脾气，也是它不好复现的原因。
+            //
+            // 对策：**在尺寸核稳之前不让这个窗口出现在屏幕上**。用 `alphaValue` 而不是 `orderOut`：
+            // 前者不影响铺排、不会让窗口从屏幕上撤下来再上去，恢复时也没有重新上屏那一下。
+            // 只在窗口还没上屏时这么做 —— 已经上屏的再藏一下，那就是真的闪了。
+            //
+            // 什么时候才需要藏，两条例外都要放行，否则会为了治闪跳造出一个更明显的闪：
+            // ① 窗口**已经上屏、而且尺寸本来就对**（SwiftUI 自己恢复对了的那种）——
+            //    没有任何要改的东西，藏一下纯属白闪；
+            // ② 只差位置（换屏之后被 `clampToScreen` 挪一下）不藏：那是「挪」不是「跳」。
+            let before = window.frame
+            let wasVisible = window.isVisible
             let desired = WindowFrameKeeper.apply(to: window)
-            // 挂上窗口之后 SwiftUI 还会在第一次铺排里再动一次尺寸（实测：刚设成 1240×840，
-            // 紧接着被改回去）。等这一轮过去再核一次，**并把存盘挂在那之后** ——
-            // 否则启动时这一来一回会被当成用户的拖动记下来，等于把错误的尺寸写进记忆。
-            DispatchQueue.main.async { [weak self, weak window] in
+            let hidden = !wasVisible || WindowFrameKeeper.differs(before, desired)
+            let originalAlpha = window.alphaValue
+            if hidden { window.alphaValue = 0 }
+            settle(window, desired: desired, turnsLeft: 8) { [weak self, weak window] in
                 guard let window else { return }
-                if window.frame != desired { window.setFrame(desired, display: true) }
+                if hidden { window.alphaValue = originalAlpha }
                 WindowFrameKeeper.clampToScreen(window)
+                // 存盘挂在这之后 —— 否则启动/重开时这一来一回会被当成用户的拖动记下来，
+                // 等于把错误的尺寸写进记忆（这条是原来就有的账，别挪到前面去）。
                 WindowFrameKeeper.store(window)
                 self?.observe(window)
+            }
+            // 兜底：`settle` 万一没跑到 `done`（窗口在中途被拆掉之类），
+            // 窗口不能永远停在全透明上 —— 那比闪一下严重得多，用户会以为「打开主窗口没反应」。
+            if hidden {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak window] in
+                    guard let window, window.alphaValue == 0 else { return }
+                    window.alphaValue = originalAlpha
+                }
+            }
+        }
+
+        /// 反复核对尺寸，直到**连续两轮**都对得上为止（最多 `turnsLeft` 轮）。
+        ///
+        /// 为什么不是「核一轮、对上就走」：SwiftUI 那次回改跟在我们 `setFrame` 的**后面**，
+        /// 只核一轮正好卡在它前面，等于没核 —— 原注释里「刚设成 1240×840，紧接着被改回去」
+        /// 记的就是这个。连续两轮对上，才说明它这一轮没再动手。
+        private func settle(_ window: NSWindow, desired: NSRect, turnsLeft: Int,
+                            matched: Int = 0, done: @escaping () -> Void) {
+            DispatchQueue.main.async { [weak self, weak window] in
+                guard let window else { return }
+                let ok = !WindowFrameKeeper.differs(window.frame, desired)
+                if !ok { window.setFrame(desired, display: true) }
+                let streak = ok ? matched + 1 : 0
+                guard streak < 2, turnsLeft > 1 else { done(); return }
+                self?.settle(window, desired: desired, turnsLeft: turnsLeft - 1,
+                             matched: streak, done: done)
             }
         }
 
@@ -139,6 +185,13 @@ extension WindowFrameKeeper {
         let size = window.frame.size
         window.setFrameOrigin(NSPoint(x: visible.minX + (visible.width - size.width) / 2,
                                       y: visible.minY + (visible.height - size.height) / 2))
+    }
+
+    /// 两个窗口框算不算「不一样」。留 0.5pt 的余量：尺寸是从存盘字符串解析出来的整数，
+    /// 而 AppKit 回读时可能带上半点几的小数，拿 `==` 比会把这种无关紧要的差当成要改的差。
+    fileprivate static func differs(_ a: NSRect, _ b: NSRect) -> Bool {
+        abs(a.width - b.width) > 0.5 || abs(a.height - b.height) > 0.5
+            || abs(a.minX - b.minX) > 0.5 || abs(a.minY - b.minY) > 0.5
     }
 
     private static func storedFrame() -> NSRect? {
