@@ -6,8 +6,15 @@
 
 > 界面目前只有简体中文。
 
-这里**没有放界面截图**：出图工装（`--render`）读的是本机真实日志，截出来就是自己的设备名、真实消费额和本机路径。
-想看界面，按下面的「从源码构建」跑起来 —— 或者直接跑 `--render <目录>` 出一套图（浅色 / 深色各一张）。
+![AI Usage 主界面](docs/images/main-light.png)
+
+## 名字与图标
+
+App 叫 **AI Usage**，中文写作「AI 用量统计」—— 菜单栏上放不下副题，那里显示的是你自己挑的那几个数
+（默认是今日费用）。
+
+图标是三根从左到右递增的圆角柱子，每根顶上一颗四角星，蓝色由浅到深：最右边那根正是界面里的强调色
+`#5D87FF`，往左依次调浅。其余几张界面图在 [`docs/images/`](docs/images/)。
 
 ---
 
@@ -37,6 +44,12 @@ Claude Code 默认保留 30 天本地日志，过了就没了。
 | **导出** | 当前筛选结果导出 CSV / TSV / JSON，带完整口径元信息 |
 | **留存对照** | 按环境列出「本机日志还剩多少天 / 档案有多少天 / 只在档案里多少天」 |
 
+三个维度各一张，另有深色与几个浮层，都在 [`docs/images/`](docs/images/)：
+
+| 按模型 | 按日期 | 深色 |
+|---|---|---|
+| [![按模型维度](docs/images/main-model.png)](docs/images/main-model.png) | [![按日期维度](docs/images/main-day.png)](docs/images/main-day.png) | [![深色](docs/images/main-dark.png)](docs/images/main-dark.png) |
+
 ## 支持的数据源
 
 | 环境 | 本地数据 | 统计方式 |
@@ -61,6 +74,38 @@ processed = uncached input + cache read + cache write + output
 ```
 
 （OpenAI 的 `input_tokens` 含 cached，已自动扣除。）
+
+设置 → 数据源 把这张表原样列出来：每个工具能拿到什么口径（token 明细 / 仅会话 / 不可读）、
+扫的是哪个目录，都能逐条改。
+
+![设置 · 数据源](docs/images/settings-sources.png)
+
+## 技术方案
+
+**形态。** 纯 SwiftUI，只有 `Form` / `TextEditor` 这类控件由 AppKit 承载；**零第三方依赖** ——
+图表是 Swift Charts，读 SQLite 直接走系统的 `SQLite3` 模块（只读打开，WAL 库并发读），
+没有 SPM 包、没有 CocoaPods / Carthage。工程由 XcodeGen 从 `project.yml` 生成，
+产物是 arm64 + x86_64 通用二进制。
+
+**读法。** JSONL 逐行流式解析，只挑带用量标记的行；SQLite 只读，按 `row_id` 增量扫；
+本地加密的（Windsurf / Antigravity / TRAE）不尝试解密 —— 能数会话的只报会话，读不出的如实标注，
+**不猜、不按 0 计**。
+
+**口径。** 四个 token 桶（未缓存输入 / 缓存读 / 缓存写 / 输出）统一成一个 `processed`，
+各家按各自的去重键去重（Claude Code 用 `message.id + requestId`，Codex 认 `token_count`
+且连续重复只算一次，Devin 用 `message_id`）—— 明细在「支持的数据源」那张表里。
+
+**跨设备。** 不走 CloudKit（要付费账号，还会破坏 ad-hoc 签名），直接读写 iCloud Drive 里的 JSON 档案。
+档案里只有「日 × 环境 × 模型」的四桶 token 与会话数，**不传费用、不传会话 id**：
+费用对四个桶是线性的，展示端用本机当时那张价格表重算，与逐条计算完全等价 ——
+所以换价之后历史消费跟着重算，而不是留下一堆用旧价算死的数字。
+
+**价格。** LiteLLM 公共价格表，匹配先精确后模糊（去掉日期后缀、去掉 `-medium` 这类档位后缀），
+手动补价优先于表里的值，查不到的显示 `Unpriced` 而不是 `$0.00`。
+
+**工程。** 解析结果按 `(path, size, mtime)` 缓存，刷新只重解析变过的文件；
+界面上的每个数都有一个机器可读的出口（`--dump` / `--menu` / `--retention` / `--export`），
+排版有一组离屏快照核对（`--render`），口径有一份 174 条断言的自测（`--selftest`）。
 
 ## 隐私
 
@@ -87,7 +132,7 @@ processed = uncached input + cache read + cache write + output
 
 ```bash
 brew install xcodegen          # 本项目用 XcodeGen 管理工程
-git clone <this-repo> && cd ai-tools-usage
+git clone https://github.com/zhengshangjinx/ai-tools-usage.git && cd ai-tools-usage
 xcodegen generate              # 必须先跑一次，见下
 ./scripts/build.sh             # Release 通用二进制（arm64 + x86_64）
 ```
@@ -119,6 +164,8 @@ App 是 ad-hoc 签名、未做公证，首次打开需要右键 →「打开」�
 加近 7 天的迷你柱与页脚三个动作（打开主窗口 / 立即刷新 / 退出）。显示哪几项、面板里放哪几项，
 都在 设置 → 显示与留存 → 菜单栏 里改（写 `menubar.config.v1`）。
 
+![菜单栏面板](docs/images/menubar-panel.png)
+
 两段分开是因为窗口不同 —— 六行同质的数排在一起，读者会以为它们是同一个时间窗里的六个指标。
 
 面板读的是**固定窗口**（今日 / 本月），不跟随主窗口选的日期范围 ——
@@ -144,6 +191,11 @@ Dock 图标会保留，设置页里也有对应的橙色提示。
 费用**不落盘、只存 token**：档案里记的是四个 token 分量，金额每次展示时按当时那张价格表算。
 所以导出文件里带上了价格表版本（`pricing.lastUpdated`）—— 换过价之后，只有对上版本号才解释得清差额。
 
+模型详情里能看到这一行单价是从哪来的（表里命中 / 手动设的），以及四个桶各占多少 ——
+缓存读那一行通常占九成，它的单价只有输入价的十分之一，省下的钱也写在那里。
+
+![模型详情](docs/images/model-detail.png)
+
 ## 数据留存
 
 **Claude Code 默认只保留 30 天本地日志**（`cleanupPeriodDays`，本机实测未设置）。本 App 的 iCloud 档案
@@ -154,6 +206,9 @@ Dock 图标会保留，设置页里也有对应的橙色提示。
 我们只读 `cleanupPeriodDays` 这一个键，也绝不写回）。
 
 一句诚实的说明：**档案只覆盖它已经开始观测之后的日子**。在装这个 App 之前就被清掉的日志，找不回来。
+设置页把两件事都写在明面上：上面是现状与建议，下面是按环境的对照表（右边那列绿字就是只在档案里的天数）。
+
+![设置 · 显示与留存](docs/images/settings-display.png)
 
 ## 导出
 
@@ -170,7 +225,8 @@ CSV / TSV / JSON 三种。导出的就是屏幕上那份表：同样的行、同
 
 ## 命令行核对
 
-界面上的每个数都有一个机器可读的出口。这些参数都**先真扫一遍本机日志**（跟界面同一份数据），打印完 `exit(0)`：
+界面上的每个数都有一个机器可读的出口。这些参数都**先真扫一遍本机日志**（跟界面同一份数据），打印完 `exit(0)`；
+加上 `--demo` 就改成读内存里编好的演示数据（见下表）。
 
 ```bash
 APP="build/Build/Products/Release/AI Usage.app/Contents/MacOS/AI Usage"
@@ -182,6 +238,8 @@ APP="build/Build/Products/Release/AI Usage.app/Contents/MacOS/AI Usage"
 "$APP" --render /tmp/r     # 主界面、设置页、菜单面板，浅色深色各一张 PNG
 "$APP" --bench             # 整页光栅化几遍，报中位数
 "$APP" --export /tmp/x csv model   # 导出，不点界面（省略格式与维度就出 3×3 共 9 个文件）
+
+"$APP" --render /tmp/r --demo      # 换成编好的演示数据，README 里那几张图就是这么出的
 ```
 
 | 参数 | 作用 |
@@ -193,6 +251,7 @@ APP="build/Build/Products/Release/AI Usage.app/Contents/MacOS/AI Usage"
 | `--render <目录>` | 离屏快照（`TextEditor` / `Form` / `Menu` 这类 AppKit 承载的视图走真实 `NSWindow` 抓图，见 `RenderHarness.captureWindow`；高度由内容决定的视图自己量，见 `captureFitting`） |
 | `--bench` | 主界面光栅化耗时中位数 |
 | `--export <目录> [csv\|tsv\|json] [device\|model\|day]` | 按维度导出三种格式，逐字节可核对 |
+| `--demo` | 演示模式，**加在上面某个参数后面**。数据换成编好的（`AIUsage/Demo/DemoData.swift`，一个固定种子的 xorshift，所以每次跑出来一样），同时关掉一切落盘与联网：配置域换成一次性的 suite、计价不联网、扫描读内存里的合成档案、iCloud 目录指向一条假路径。它不保证「不碰真实配置域」——出图会把窗口真的建起来，**AppKit 自己**会往真实域里写窗口尺寸，退出时按原值还回去（见 `DemoRuntime` 的文件头）。`scripts/shoot.sh` 出图前后各导一次配置域做比对，内容不一致就直接失败 |
 
 `--selftest` 的红线：**绝不碰 `ScanCache.shared`**（它读写并会清理 `~/Library/Application Support/AIUsage/`
 下的缓存文件），**绝不写 `UserDefaults.standard`，也绝不写用户配置所在的任何域**。解析用例全部用临时目录里的合成 fixture，
@@ -211,6 +270,7 @@ APP="build/Build/Products/Release/AI Usage.app/Contents/MacOS/AI Usage"
 AIUsage/
 ├── App.swift                  App 入口、三个 scene、离屏渲染工装（--render / --bench）
 ├── SelfTest.swift             --selftest 的全部断言
+├── Demo/                      --demo 的合成数据与演示模式开关
 ├── Providers/                 各数据源的解析器 + 扫描缓存 + SQLite 读取
 ├── Store/UsageStore.swift     聚合、筛选、排序的唯一真相
 ├── Pricing/                   LiteLLM 价格表、手动补价
@@ -222,8 +282,10 @@ AIUsage/
 └── Util/                      格式化、主题令牌
 scripts/
 ├── build.sh                   一键 Release 通用二进制
+├── shoot.sh                   出 README 用的那几张截图（--render --demo）
 ├── export.sh                  可选的打包导出（默认跳过）
 └── export-dir.local           本机导出目录（不进仓库）
+docs/images/                   README 里的截图，怎么重拍见目录里的 README
 project.yml                    工程配置的唯一事实来源（XcodeGen）
 ```
 
