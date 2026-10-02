@@ -87,7 +87,7 @@ final class PricingService: ObservableObject {
     }
 
     init() {
-        if let data = UserDefaults.standard.data(forKey: Self.overridesKey),
+        if let data = DemoRuntime.defaults.data(forKey: Self.overridesKey),
            let decoded = try? JSONDecoder().decode([String: ModelPrice].self, from: data) {
             overrides = decoded
         } else {
@@ -98,6 +98,13 @@ final class PricingService: ObservableObject {
     // MARK: Loading
 
     func loadCachedThenRefresh() async {
+        // 演示模式：不读缓存文件（它在用户的 Application Support 里），更不联网 ——
+        // 出图慢是一回事，联网截出来的「价格更新于 x 分钟前」每次都不一样才是真问题。
+        if DemoRuntime.isActive {
+            install(DemoData.priceTable)
+            lastUpdated = DemoRuntime.priceUpdatedAt
+            return
+        }
         if let data = try? Data(contentsOf: Self.cacheFile) {
             apply(data: data)
             if let attrs = try? FileManager.default.attributesOfItem(atPath: Self.cacheFile.path), let d = attrs[.modificationDate] as? Date {
@@ -109,6 +116,12 @@ final class PricingService: ObservableObject {
     }
 
     func refresh() async {
+        // 演示模式下「刷新价格」按钮仍然可点，但它只是把那份编好的表再装一遍
+        if DemoRuntime.isActive {
+            install(DemoData.priceTable)
+            lastUpdated = DemoRuntime.priceUpdatedAt
+            return
+        }
         guard !isRefreshing else { return }
         isRefreshing = true
         defer { isRefreshing = false }
@@ -126,6 +139,19 @@ final class PricingService: ObservableObject {
         }
     }
 
+    /// 把一张已经解析好的价格表装进查表结构。`apply(data:)` 与演示模式共用它 ——
+    /// 归一化与模糊匹配只该有一份实现，否则演示模式里命中的条目口径会和真表不一致。
+    private func install(_ table: [String: ModelPrice]) {
+        remote = table
+        normalizedRemote = [:]
+        for (k, v) in table {
+            let stripped = Self.stripProvider(k).lowercased()
+            if normalizedRemote[stripped] == nil || !k.contains("/") { normalizedRemote[stripped] = v }
+        }
+        cache.removeAll()
+        objectWillChange.send()
+    }
+
     private func apply(data: Data) {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
         var out: [String: ModelPrice] = [:]
@@ -139,19 +165,12 @@ final class PricingService: ObservableObject {
                                   cacheRead: d["cache_read_input_token_cost"] as? Double,
                                   cacheWrite: d["cache_creation_input_token_cost"] as? Double)
         }
-        remote = out
-        normalizedRemote = [:]
-        for (k, v) in out {
-            let stripped = Self.stripProvider(k).lowercased()
-            if normalizedRemote[stripped] == nil || !k.contains("/") { normalizedRemote[stripped] = v }
-        }
-        cache.removeAll()
-        objectWillChange.send()
+        install(out)
     }
 
     private func saveOverrides() {
         if let data = try? JSONEncoder().encode(overrides) {
-            UserDefaults.standard.set(data, forKey: Self.overridesKey)
+            DemoRuntime.defaults.set(data, forKey: Self.overridesKey)
         }
     }
 

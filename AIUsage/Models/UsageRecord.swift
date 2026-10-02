@@ -149,10 +149,27 @@ enum SourceKind: String, CaseIterable, Codable, Identifiable {
         }
     }
 
+    /// 界面上该显示的默认路径。演示模式换成 `/Users/you/...`：「数据源」页会把这几行
+    /// 原样画出来，用真实默认值等于把作者的用户名写进提交进仓库的截图。
+    var configuredDefaultPaths: [String] {
+        guard DemoRuntime.isActive else { return defaultPaths }
+        let home = NSHomeDirectory()
+        return defaultPaths.map { $0.replacingOccurrences(of: home, with: "/Users/you") }
+    }
+
     /// 本机是否检测到该工具（任一默认路径存在）
     var isDetected: Bool {
-        defaultPaths.contains { FileManager.default.fileExists(atPath: $0) }
+        // 演示模式给固定答案：真去 stat 磁盘的话，同一份代码在作者机器上和别人机器上
+        // 截出来的「未检测到」徽标不一样，图就不可复现了（见 DemoRuntime）
+        if DemoRuntime.isActive { return Self.demoDetected.contains(self) }
+        return defaultPaths.contains { FileManager.default.fileExists(atPath: $0) }
     }
+
+    /// 演示模式里哪些工具算「检测到了」。TRAE 故意不在里面 ——
+    /// 它是唯一一个「本地数据不可读」的数据源，截图里该有这么一枚徽标。
+    static let demoDetected: Set<SourceKind> = [
+        .claudeCode, .codex, .devin, .cursor, .qoder, .codebuddy, .windsurf, .antigravity,
+    ]
 
     func makeProvider() -> UsageProvider {
         switch self {

@@ -102,7 +102,10 @@ struct RetentionReport {
 
 extension RetentionReport {
     static var claudeSettingsPath: String {
-        NSHomeDirectory() + "/.claude/settings.json"
+        // 演示模式换掉：设置页「留存」那一节是**直接渲染这个属性**的（不是渲染报告里的字段），
+        // 注入一份假的 report 遮不住它，于是作者的短用户名会原样出现在提交进仓库的截图里。
+        if DemoRuntime.isActive { return DemoRuntime.claudeSettingsPath }
+        return NSHomeDirectory() + "/.claude/settings.json"
     }
 
     /// 读 `~/.claude/settings.json` 里的 `cleanupPeriodDays`。
@@ -152,7 +155,15 @@ extension RetentionReport {
     }
 
     /// 拼一份完整的现状 = 读那个设置文件 + 纯计算。**在后台线程调**（要读文件、要解 JSON）。
+    ///
+    /// 演示模式走纯计算那一半，并且**固定成「没设置过 → 默认 30 天」**：
+    /// 那份 `~/.claude/settings.json` 是用户真实的东西（还带着凭据），出图不该去读它，
+    /// 更不该让作者自己设的留存天数决定截图长什么样。
     static func make(records: [UsageRecord], deviceFiles: [DeviceFile]) -> RetentionReport {
+        if DemoRuntime.isActive {
+            return make(records: records, deviceFiles: deviceFiles,
+                        cleanupPeriodDays: nil, settingsFileExists: true)
+        }
         let cleanup = readCleanupPeriodDays()
         return make(records: records, deviceFiles: deviceFiles,
                     cleanupPeriodDays: cleanup.value, settingsFileExists: cleanup.fileExists)

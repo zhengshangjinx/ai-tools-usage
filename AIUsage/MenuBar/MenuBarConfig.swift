@@ -145,7 +145,7 @@ final class MenuBarSettings: ObservableObject {
 
     init() {
         // 直接写 stored：init 里走 config 的 setter 会读到还没初始化的 stored
-        if let data = UserDefaults.standard.data(forKey: Self.key),
+        if let data = DemoRuntime.defaults.data(forKey: Self.key),
            let decoded = try? JSONDecoder().decode(MenuBarConfig.self, from: data) {
             stored = decoded
         } else {
@@ -155,6 +155,6 @@ final class MenuBarSettings: ObservableObject {
 
     private func save() {
         guard let data = try? JSONEncoder().encode(config) else { return }
-        UserDefaults.standard.set(data, forKey: Self.key)
+        DemoRuntime.defaults.set(data, forKey: Self.key)
     }
 }

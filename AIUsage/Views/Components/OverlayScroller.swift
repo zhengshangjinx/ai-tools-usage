@@ -54,9 +54,13 @@ private enum OverlayScrollerKeeper {
     private static var boxes: [Box] = []
     private static var observing = false
 
-    /// 用户在系统设置里显式选过滚动条样式就照办，不掺和
+    /// 用户在系统设置里显式选过滚动条样式就照办，不掺和。
+    ///
+    /// 演示模式固定按「没选过」处理：这台机器上要是选了「始终显示」，那根常驻粗滚动条
+    /// 会直接截进提交进仓库的图里 —— 那既不是多数人看到的样子，也不是这份代码想展示的东西。
     private static var shouldAdapt: Bool {
-        UserDefaults.standard.string(forKey: "AppleShowScrollBars") == nil
+        if DemoRuntime.isActive { return true }
+        return UserDefaults.standard.string(forKey: "AppleShowScrollBars") == nil
     }
 
     static func adopt(_ scrollView: NSScrollView) {

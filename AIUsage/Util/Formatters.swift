@@ -80,9 +80,16 @@ enum Formatters {
         String(format: "%.1f%%", v * 100)
     }
 
+    /// 界面通篇是中文，日期也必须说中文。不能靠 `Locale.current` ——
+    /// 这个 bundle 一个本地化都没声明，`Locale.current` 会落到开发语言（en）上，
+    /// 于是系统语言明明是中文、界面上却出现 "Jul 5" 和 "1 min. ago" 这种半截英文。
+    /// 固定成 zh_CN，跟写死的中文界面保持一致。
     static let dayFormatter: DateFormatter = {
         let f = DateFormatter()
-        f.dateFormat = "MMM d"
+        f.locale = Locale(identifier: "zh_CN")
+        // 用模板而不是写死 "MMM d"：后者在中文下出来是「7月 5」——月份和日子中间夹一个空格，
+        // 中文里不这么写。交给模板排，中文得到的是「7月5日」。
+        f.setLocalizedDateFormatFromTemplate("MMMd")
         return f
     }()
 

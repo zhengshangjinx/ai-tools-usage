@@ -194,8 +194,12 @@ extension WindowFrameKeeper {
             || abs(a.minX - b.minX) > 0.5 || abs(a.minY - b.minY) > 0.5
     }
 
+    /// 读写窗口尺寸的配置域。演示模式换成一次性 suite（见 `DemoRuntime`）：
+    /// `prepareAtLaunch()` 会**删**键、`store(_:)` 会写键，出图时这两个都会真的跑。
+    private static var defaults: UserDefaults { DemoRuntime.defaults }
+
     private static func storedFrame() -> NSRect? {
-        guard let raw = UserDefaults.standard.string(forKey: defaultsKey),
+        guard let raw = defaults.string(forKey: defaultsKey),
               let rect = frame(fromStored: raw),
               rect.width >= minSize.width, rect.height >= minSize.height else { return nil }
         return rect
@@ -213,7 +217,6 @@ extension WindowFrameKeeper {
     /// 只搬站得住的（历史上真出现过 `1000 470` 这种低于最小高度的记录，继承它等于把毛病留着），
     /// 搬完旧键一律清掉 —— 它已经没有任何用途了。
     private static func migrateLegacyFrame() {
-        let defaults = UserDefaults.standard
         let legacy = defaults.dictionaryRepresentation().keys
             .filter { $0.hasPrefix(legacyPrefix) && !$0.contains(legacySkip) }
         for key in legacy {
@@ -241,8 +244,8 @@ extension WindowFrameKeeper {
     /// 只存前四个数（原点 + 尺寸）；屏幕那部分不存，落到别的显示器上由 `clampToScreen` 兜。
     private static func store(_ window: NSWindow) {
         let f = window.frame
-        UserDefaults.standard.set(String(format: "%.0f %.0f %.0f %.0f", f.origin.x, f.origin.y, f.width, f.height),
-                                  forKey: defaultsKey)
+        defaults.set(String(format: "%.0f %.0f %.0f %.0f", f.origin.x, f.origin.y, f.width, f.height),
+                     forKey: defaultsKey)
     }
 
     fileprivate static func clampToScreen(_ window: NSWindow) {

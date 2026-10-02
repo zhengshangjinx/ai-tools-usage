@@ -29,7 +29,9 @@ final class AppBehaviorSettings: ObservableObject {
 
     /// `defaults` 可注入是为了 `--selftest`：自测必须能用一次性 suite 验读写，
     /// 直接 `AppBehaviorSettings()` 会拿到 `.standard`，写一下就把用户自己的设置改了。
-    init(defaults: UserDefaults = .standard) {
+    /// 默认值取 `DemoRuntime.defaults` 出于同一个理由：`--demo` 下出图会真的建窗口、
+    /// 真的走一遍关窗逻辑，写进真配置域同样是在改用户的设置。非演示模式下它就是 `.standard`。
+    init(defaults: UserDefaults = DemoRuntime.defaults) {
         self.defaults = defaults
         // 用 `object(forKey:) as? Bool`，**不是** `bool(forKey:)` ——
         // 后者分不清「从没设过」和「明确设成 false」，而这一项的默认值恰好是 true。

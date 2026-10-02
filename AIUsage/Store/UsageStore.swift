@@ -407,14 +407,14 @@ final class UsageStore: ObservableObject {
 
     init(pricing: PricingService) {
         self.pricing = pricing
-        if let data = UserDefaults.standard.data(forKey: Self.configsKey),
+        if let data = DemoRuntime.defaults.data(forKey: Self.configsKey),
            let decoded = try? JSONDecoder().decode([SourceKind: SourceConfig].self, from: data) {
             sourceConfigs = decoded
         } else {
-            sourceConfigs = Dictionary(uniqueKeysWithValues: SourceKind.allCases.map { ($0, SourceConfig(paths: $0.defaultPaths)) })
+            sourceConfigs = Dictionary(uniqueKeysWithValues: SourceKind.allCases.map { ($0, SourceConfig(paths: $0.configuredDefaultPaths)) })
         }
         for kind in SourceKind.allCases where sourceConfigs[kind] == nil {
-            sourceConfigs[kind] = SourceConfig(paths: kind.defaultPaths)
+            sourceConfigs[kind] = SourceConfig(paths: kind.configuredDefaultPaths)
         }
         pricing.objectWillChange
             .receive(on: DispatchQueue.main)
@@ -458,18 +458,38 @@ final class UsageStore: ObservableObject {
     }
 
     func resetPaths(for kind: SourceKind) {
-        sourceConfigs[kind]?.paths = kind.defaultPaths
+        sourceConfigs[kind]?.paths = kind.configuredDefaultPaths
     }
 
     private func saveConfigs() {
         if let data = try? JSONEncoder().encode(sourceConfigs) {
-            UserDefaults.standard.set(data, forKey: Self.configsKey)
+            DemoRuntime.defaults.set(data, forKey: Self.configsKey)
         }
+    }
+
+    /// 留存面板与工装要读的「共享目录里那几份档案」。
+    ///
+    /// 提出来是因为它有四个读点（`--retention`、出图工装、`DisplaySettings.reload()`、
+    /// 以及自测），而演示模式必须一个不漏地换成内存里那份 —— 漏掉任何一个，
+    /// 出图就会去读作者真实的 iCloud 目录。`syncNow()` 里那次是写入路径，另说。
+    var archiveDeviceFiles: [DeviceFile] {
+        if DemoRuntime.isActive { return DemoRuntime.archiveDeviceFiles }
+        return deviceSync.readAll().files
     }
 
     // MARK: 扫描 + 同步
 
     func refresh() async {
+        // 演示模式：不扫盘（`ScanCache` 在用户的 Application Support 里，碰不得），
+        // 改用编好的那套记录，然后照常走同步与聚合。出图和「--demo 手工看看」走的是同一条路。
+        if DemoRuntime.isActive {
+            records = DemoData.localRecords
+            lastScan = DemoRuntime.lastScan
+            scanDuration = DemoRuntime.scanDuration
+            syncNow()
+            recompute()
+            return
+        }
         guard !isScanning else { return }
         isScanning = true
         let started = Date()
@@ -511,6 +531,16 @@ final class UsageStore: ObservableObject {
         syncWarnings = []
         let selfId = DeviceIdentity.id
 
+        // 演示模式：不写共享目录、也不读它。档案是内存里编好的那几份，
+        // 但**合并规则与真同步完全同一份代码**（下面那个 merge），
+        // 否则截图上的「按设备」就可能和真界面算的不是一回事，图也就不再能证明什么。
+        if DemoRuntime.isActive {
+            merge(local: local,
+                  files: DemoRuntime.archiveDeviceFiles.filter { $0.deviceId != selfId },
+                  localUpdatedAt: DemoRuntime.localDeviceUpdatedAt)
+            return
+        }
+
         var files: [DeviceFile] = []
         if syncEnabled {
             let mine = DeviceFile(
@@ -527,6 +557,17 @@ final class UsageStore: ObservableObject {
             // 本机那份以刚扫出来的为准，避免读回旧内容
             files = read.filter { $0.deviceId != selfId }
         }
+        merge(local: local, files: files, localUpdatedAt: Date())
+    }
+
+    /// 把「本机聚合 + 各远端档案」并成界面用的三类数据（合并行、会话行、设备清单）。
+    ///
+    /// 提出来是因为它有两个入口：正常同步（读 iCloud 目录）与演示模式（档案全在内存里）。
+    /// 规则只该有一份 —— 抄一遍的代价是截图和真界面从此可能算出不同的数，
+    /// 那这张图就不再能证明界面是对的。
+    private func merge(local: (rows: [AggregateRow], sessions: [SessionCountRow]),
+                       files: [DeviceFile], localUpdatedAt: Date) {
+        let selfId = DeviceIdentity.id
 
         var merged: [ScopedRow] = local.rows.map { ScopedRow(deviceId: selfId, row: $0) }
         var mergedSessions: [ScopedSession] = local.sessions.map { ScopedSession(deviceId: selfId, row: $0) }
@@ -538,7 +579,7 @@ final class UsageStore: ObservableObject {
         sessions = mergedSessions
 
         var list: [DeviceInfo] = [DeviceInfo(
-            id: selfId, name: DeviceIdentity.name, isLocal: true, updatedAt: Date(),
+            id: selfId, name: DeviceIdentity.name, isLocal: true, updatedAt: localUpdatedAt,
             rowCount: local.rows.count, sessionTotal: local.sessions.reduce(0) { $0 + $1.count }
         )]
         list.append(contentsOf: files.map {
@@ -549,7 +590,7 @@ final class UsageStore: ObservableObject {
         // 丢掉已不存在的设备选择
         let live = Set(devices.map(\.id))
         if !selectedDevices.isSubset(of: live) { selectedDevices = selectedDevices.intersection(live) }
-        lastSync = Date()
+        lastSync = localUpdatedAt
     }
 
     /// 把原始记录压成「日 × 环境 × 模型」的 4 桶聚合 + 每日会话计数。
@@ -592,9 +633,9 @@ final class UsageStore: ObservableObject {
 
     // MARK: 设备选择
 
-    @Published var syncEnabled: Bool = UserDefaults.standard.object(forKey: "sync.enabled.v1") as? Bool ?? true {
+    @Published var syncEnabled: Bool = DemoRuntime.defaults.object(forKey: "sync.enabled.v1") as? Bool ?? true {
         didSet {
-            UserDefaults.standard.set(syncEnabled, forKey: "sync.enabled.v1")
+            DemoRuntime.defaults.set(syncEnabled, forKey: "sync.enabled.v1")
             syncNow()
             recompute()
         }

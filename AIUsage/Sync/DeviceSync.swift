@@ -98,26 +98,38 @@ enum DeviceIdentity {
     private static let idKey = "device.id.v1"
     private static let nameKey = "device.name.v1"
 
+    /// 读写的配置域。生产环境就是 `.standard`；`--demo` 下换成一次性 suite（见 `DemoRuntime`）。
+    /// 之所以做成属性而不是到处写 `UserDefaults.standard`：这里的默认名是**系统电脑名**，
+    /// 出图时一个字都不许落到真配置域里，也不许从里面读出来。
+    static var defaults: UserDefaults { DemoRuntime.defaults }
+
     static var id: String {
-        if let v = UserDefaults.standard.string(forKey: idKey), !v.isEmpty { return v }
+        if let v = defaults.string(forKey: idKey), !v.isEmpty { return v }
         let v = UUID().uuidString
-        UserDefaults.standard.set(v, forKey: idKey)
+        defaults.set(v, forKey: idKey)
         return v
     }
 
     /// 展示名：用户覆盖优先，否则系统电脑名
     static var name: String {
         get {
-            if let v = UserDefaults.standard.string(forKey: nameKey), !v.trimmingCharacters(in: .whitespaces).isEmpty {
+            if let v = defaults.string(forKey: nameKey), !v.trimmingCharacters(in: .whitespaces).isEmpty {
                 return v
             }
             return Formatters.deviceName
         }
         set {
             let t = newValue.trimmingCharacters(in: .whitespaces)
-            if t.isEmpty { UserDefaults.standard.removeObject(forKey: nameKey) }
-            else { UserDefaults.standard.set(t, forKey: nameKey) }
+            if t.isEmpty { defaults.removeObject(forKey: nameKey) }
+            else { defaults.set(t, forKey: nameKey) }
         }
+    }
+
+    /// 直接往给定配置域里写一份身份。演示模式用它把身份钉死 ——
+    /// 走的是正常那条写路径，只是换了个域，不额外开洞。
+    static func write(id: String, name: String, to defaults: UserDefaults) {
+        defaults.set(id, forKey: idKey)
+        defaults.set(name, forKey: nameKey)
     }
 }
 
@@ -132,19 +144,23 @@ final class DeviceSync {
 
     private let folderKey = "sync.folder.v1"
 
+    private var defaults: UserDefaults { DemoRuntime.defaults }
+
     /// 共享目录，可在设置里改（例如换成本机其他同步盘）
     var folderURL: URL {
         get {
-            if let p = UserDefaults.standard.string(forKey: folderKey), !p.isEmpty {
+            // 演示模式：这条路径会被设置页原样画出来，所以它得像个 iCloud 路径但一个字都不真
+            if DemoRuntime.isActive { return DemoRuntime.sharedFolder }
+            if let p = defaults.string(forKey: folderKey), !p.isEmpty {
                 return URL(fileURLWithPath: (p as NSString).expandingTildeInPath, isDirectory: true)
             }
             return Self.defaultFolder
         }
-        set { UserDefaults.standard.set(newValue.path, forKey: folderKey) }
+        set { defaults.set(newValue.path, forKey: folderKey) }
     }
 
     var isUsingDefaultFolder: Bool {
-        UserDefaults.standard.string(forKey: folderKey)?.isEmpty ?? true
+        DemoRuntime.isActive || (defaults.string(forKey: folderKey)?.isEmpty ?? true)
     }
 
     static var defaultFolder: URL {
@@ -155,7 +171,10 @@ final class DeviceSync {
 
     /// 默认目录所在盘符是否存在（iCloud Drive 未登录时为 false）
     static var defaultFolderAvailable: Bool {
-        FileManager.default.fileExists(atPath: FileManager.default.homeDirectoryForCurrentUser
+        // 演示模式固定为 true：设置页按它切换图标与那条橙色提示，
+        // 而这个探测结果在没登录 iCloud 的机器上是 false —— 同一份代码会截出两张不同的图
+        if DemoRuntime.isActive { return true }
+        return FileManager.default.fileExists(atPath: FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs").path)
     }
 

@@ -13,6 +13,9 @@ struct AIUsageApp: App {
     @StateObject private var behavior: AppBehaviorSettings
 
     init() {
+        // 第一件事：`--demo` 的退出清理挂上去。必须早于下面任何一处会读配置域的地方 ——
+        // `prepareAtLaunch()` 已经在读写 `DemoRuntime.defaults` 了（见 DemoRuntime）
+        DemoRuntime.install()
         // 先于任何窗口创建：清掉 SwiftUI 自带的窗口尺寸记录，让尺寸只由 WindowFrameKeeper 说了算
         WindowFrameKeeper.prepareAtLaunch()
         let pricing = PricingService()
@@ -54,7 +57,7 @@ struct AIUsageApp: App {
                 case "retention":
                     // 档案读取要走 DeviceSync，所以这一句留在工装里；UsageStore 不必认识留存那套类型
                     let report = RetentionReport.make(records: store.records,
-                                                      deviceFiles: store.deviceSync.readAll().files)
+                                                      deviceFiles: store.archiveDeviceFiles)
                     print(report.debugDump())
                 default: print(store.debugDump())
                 }
@@ -67,6 +70,11 @@ struct AIUsageApp: App {
         // id 是给菜单面板的 `openWindow(id: "main")` 用的 —— 没有它，点「打开主窗口」不会有反应。
         // 窗口尺寸记忆不受影响：`WindowFrameKeeper` 用的是自己那个固定名（`NSWindow Frame AIUsage.MainWindow`），
         // 不是 SwiftUI 按视图类型链生成的自存名（见那个文件开头那段账）。
+        //
+        // **这个 scene 没法在演示模式下条件声明**（想让出图不建真窗口，省掉 AppKit 那笔窗口自存）：
+        // `SceneBuilder` 的 `if` 只支持 `#available` 子句，换任何别的条件都是「failed to produce
+        // diagnostic」这种指不到问题所在的编译错误。真窗口照建，那笔自存由 `DemoRuntime.restoreAppKitKeys`
+        // 在退出时按原值还回去 —— 那一段的账记在 `DemoRuntime` 里。
         WindowGroup("AI 用量统计", id: "main") {
             ContentView()
                 .environmentObject(store)
@@ -192,14 +200,17 @@ enum RenderHarness {
         for (name, scheme, appearance) in [("light", ColorScheme.light, NSAppearance.Name.aqua),
                                            ("dark", ColorScheme.dark, NSAppearance.Name.darkAqua)] {
             NSApp.appearance = NSAppearance(named: appearance)
+            // 每种外观都从默认维度（按设备）开始。`breakdown` 是 store 上的状态，
+            // 上一轮末尾那几张把它留在 `.day` 了 —— 不重置的话深色那张 hero 出来是「按日期」，
+            // 和浅色那张并排一看就不是同一个界面（这个坑真的踩到过）。
+            store.breakdown = .device
             // TitleStrip 也要出图：它占着顶部 28pt，漏掉的话快照和真窗口差一条
             // alignment: .top —— 这一张是模拟真窗口（1520×950 上下）：内容比画布略高，
             // 真窗口也是从顶部开始显示、底部露不全，居中反而会把顶部那条标题带切掉。
             capture(VStack(spacing: 0) { TitleStrip(); DashboardBody() }
-                        .background(Theme.pageBackground)   // 漏掉它页面底会透明，深色下看着像白底
                         .environmentObject(store).environmentObject(pricing).environment(\.colorScheme, scheme),
                     size: CGSize(width: WindowFrameKeeper.designSize.width, height: 1010),
-                    alignment: .top, to: "\(dir)/main-\(name).png")
+                    alignment: .top, pageBackground: scheme, to: "\(dir)/main-\(name).png")
             // ── 设置页走**真窗口**截图，不走 ImageRenderer ──
             // 这里踩过一个坑，记下来：这几张原先是用 `capture(...)`（ImageRenderer）出的，
             // 出来的其实**是纯空白** —— `settings-devices-light.png` 与 `settings-display-light.png`
@@ -213,12 +224,16 @@ enum RenderHarness {
             // 而 TabView 的一屏到底停在哪个页签上是运行期状态，不能指望
             await captureWindow(DeviceSyncSettings().environmentObject(store).environmentObject(pricing).environmentObject(menuBar).environmentObject(behavior).environment(\.colorScheme, scheme),
                                 size: CGSize(width: 680, height: 620), to: "\(dir)/settings-devices-\(name).png")
+            // 「数据源」那一页此前没有快照：它是唯一一页把全部十个工具、各自能拿到什么口径
+            // （token 明细 / 仅会话 / 不可读）和本机默认路径一次列全的地方，README 要用它。
+            await captureWindow(SourcesSettings().environmentObject(store).environmentObject(pricing).environmentObject(menuBar).environmentObject(behavior).environment(\.colorScheme, scheme),
+                                size: CGSize(width: 680, height: 620), to: "\(dir)/settings-sources-\(name).png")
             // 留存那一页的行数随环境数走，620 是设置窗口的高度、内容更高就自己滚，
             // 快照只核对「看得见的那一屏」排版对不对。
             // **必须注入报告**：那一页的数据是在 `.task` 里算的，而离屏工装不跑 `.task`，
             // 不注入就只能拍到「正在统计…」的占位。现算一份真的进去（只读，不改任何东西）。
             let retention = RetentionReport.make(records: store.records,
-                                                 deviceFiles: store.deviceSync.readAll().files)
+                                                 deviceFiles: store.archiveDeviceFiles)
             await captureWindow(DisplaySettings(injectedReport: retention)
                         .environmentObject(store).environmentObject(pricing).environmentObject(menuBar).environmentObject(behavior).environment(\.colorScheme, scheme),
                     size: CGSize(width: 680, height: 620), to: "\(dir)/settings-display-\(name).png")
@@ -232,8 +247,12 @@ enum RenderHarness {
             capture(PricingBrowser().environmentObject(pricing).environment(\.colorScheme, scheme),
                     size: CGSize(width: 600, height: 380), to: "\(dir)/pricing-browser-\(name).png")
             if let m = store.snapshot.byModel.first?.label {
-                capture(ModelDetailPopover(model: m).environmentObject(store).environmentObject(pricing).environment(\.colorScheme, scheme),
-                        size: CGSize(width: 440, height: 760), to: "\(dir)/model-detail-\(name).png")
+                // 这张走**真窗口**：卡片上那几个按钮是 `.buttonStyle(.borderless)`，
+                // 而 borderless 按钮在 AppKit 那边是个真 NSButton —— `ImageRenderer`
+                // 画不出来，会留下一个黄底禁止符号的占位块（复制模型名旁边一个、底部两个）。
+                // 快照里出现那种方块等于这张图废了，所以这里跟设置页走同一条路。
+                await captureWindowFitting(ModelDetailPopover(model: m).environmentObject(store).environmentObject(pricing).environment(\.colorScheme, scheme),
+                                           width: 440, to: "\(dir)/model-detail-\(name).png")
                 // 详情浮层：窗口高度不同，卡片一个贴内容、一个被压到内部滚动，顺带核对居中与遮罩。
                 // 注意这里只能核对**几何**（卡片多大、落在哪）—— 中段一旦真的需要滚动，
                 // ImageRenderer 就画不出那个 ScrollView 的内容（离屏渲染的已知限制，
@@ -243,16 +262,16 @@ enum RenderHarness {
                 capture(ModelDetailOverlay(model: m, dismiss: {}).environmentObject(store).environmentObject(pricing).environment(\.colorScheme, scheme),
                         size: CGSize(width: 960, height: 640), to: "\(dir)/overlay-short-\(name).png")
             }
+
             // 三个维度各出一张：明细表的列宽与标签溢出只有在真实行数下才看得出来。
             // alignment 同样要 .top —— 「按日期」77 行、整页 4000 多 pt 高，居中之后这一张
             // 正好截在表格中段，表头根本不在图里（量的就是表头跟数据对不对齐，等于白出）。
             for mode in [BreakdownMode.model, .day] {
                 store.breakdown = mode
                 capture(VStack(spacing: 0) { TitleStrip(); DashboardBody() }
-                            .background(Theme.pageBackground)
                             .environmentObject(store).environmentObject(pricing).environment(\.colorScheme, scheme),
                         size: CGSize(width: WindowFrameKeeper.designSize.width, height: 1420),
-                        alignment: .top,
+                        alignment: .top, pageBackground: scheme,
                         to: "\(dir)/main-\(name)-\(mode.fileTag).png")
             }
             // 最小窗口宽度下每个维度各出一张（只出浅色，两种外观的排版完全一样）：
@@ -267,10 +286,9 @@ enum RenderHarness {
                     // 整页不到 1420 高，居中之后顶部会空出一大条、表头跑到半空中 ——
                     // 快照看着像排版坏了，其实只是这一张没填满。贴顶就和真窗口一致。
                     capture(VStack(spacing: 0) { TitleStrip(); DashboardBody() }
-                                .background(Theme.pageBackground)
                                 .environmentObject(store).environmentObject(pricing).environment(\.colorScheme, scheme),
                             size: CGSize(width: WindowFrameKeeper.minSize.width, height: 1420),
-                            alignment: .top,
+                            alignment: .top, pageBackground: scheme,
                             to: "\(dir)/main-\(name)-narrow-\(mode.fileTag).png")
                 }
             }
@@ -351,12 +369,25 @@ enum RenderHarness {
     /// 建完窗口立刻截图只会得到一张空白（最早那几张快照就是这么废掉的）。
     /// 用 `sleep` 而不是 `RunLoop.current.run(until:)`：后者是在主线程里套一层跑圈，
     /// 而这个函数本来就是 `async`，让出去一拍更干净。
+    /// 只为截图存在的窗口：普通 `.borderless` 窗口不能成为 key window，而 AppKit 的控件
+    /// （`NSSwitch` 这类）在非 key 窗口里一律画成灰色的「窗口没激活」样式 ——
+    /// 截出来的十来个开关会全是灰的，看着像全部关掉了，正好和那页要说明的事情相反。
+    /// 让它能当 key 窗口，就能拿到用户平时看到的那个样子。
+    private final class CaptureWindow: NSWindow {
+        override var canBecomeKey: Bool { true }
+    }
+
     @MainActor
     private static func captureWindow<V: View>(_ view: V, size: CGSize, to path: String) async {
         let host = NSHostingView(rootView: view)
         host.frame = CGRect(origin: .zero, size: size)
-        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        let window = CaptureWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = host
+        // 摆到屏幕外再 orderFront：窗口要真的在屏幕列表里才当得上 key window，
+        // 而整个落在可见范围之外就不会有任何东西闪到用户眼前。
+        // **不调 `NSApp.activate`** —— 那会把焦点从用户正在用的 App 手里抢走。
+        window.setFrameOrigin(NSPoint(x: -30_000, y: -30_000))
+        window.makeKeyAndOrderFront(nil)
         host.layoutSubtreeIfNeeded()
         try? await Task.sleep(nanoseconds: 300_000_000)
         host.layoutSubtreeIfNeeded()
@@ -368,8 +399,23 @@ enum RenderHarness {
             print("window capture encode failed: \(path)"); return
         }
         try? png.write(to: URL(fileURLWithPath: path))
-        // 拆掉，免得它跟真窗口抢 `NSApp.windows` 里的位置（后面还要截别的页面）
+        // 拆掉，免得它跟真窗口抢 `NSApp.windows` 里的位置，也免得它继续当着 key window
+        // （后面还要截别的页面，而它现在是排在屏幕外的前排）
+        window.orderOut(nil)
         window.contentView = nil
+    }
+
+    /// `captureWindow` 的「高度由内容决定」版：先量贴合高度，再按量到的尺寸挂窗口截图。
+    /// 需要它的只有模型详情卡 —— 它同时具备两个条件：宽度固定（440）、高度随内容走，
+    /// 而且身上有 `ImageRenderer` 画不出来的 borderless 按钮。
+    @MainActor
+    private static func captureWindowFitting<V: View>(_ view: V, width: CGFloat, to path: String) async {
+        let probe = NSHostingView(rootView: view.frame(width: width))
+        probe.layoutSubtreeIfNeeded()
+        let measured = probe.fittingSize.height
+        // 量不到就退回一个「肯定够」的高度，与 `captureFitting` 同一套兜底
+        let height = measured > 1 ? ceil(measured) : 760
+        await captureWindow(view, size: CGSize(width: width, height: height), to: path)
     }
 
     /// 高度由内容决定的视图（菜单栏面板就是）：先量一次贴合高度，再按量到的尺寸出图。
@@ -395,9 +441,21 @@ enum RenderHarness {
 
     /// `alignment` 只管内容比 `size` 矮时往哪边靠 —— 定尺寸的 `.frame` 默认居中，
     /// 页面类的快照要 `.top`（跟真窗口一样贴顶），卡片类的保持默认居中。
+    ///
+    /// `pageBackground` 给页面类快照用：整页铺不满那个高度时，空出来的那一条会**透明着出图**
+    /// （PNG 里就是黑的，浅色下就是页面底部横着一条黑边，深色下反而看不出来）。
+    /// 所以底色得铺在这层 `.frame` **外面** —— 铺在里面只盖得住内容自己那块。
+    ///
+    /// 参数收的是外观而不是一个 `Bool`：底色是动态色，得跟着 `\.colorScheme` 走，
+    /// 而调用方那份 `.environment(\.colorScheme,…)` 套在内容上、够不到这层新加的底色。
+    /// 铺完再套一次同样的外观，深色那张的底色才不会还是浅色的（**踩过**）。
     @MainActor
-    private static func capture<V: View>(_ view: V, size: CGSize, alignment: Alignment = .center, to path: String) {
-        let renderer = ImageRenderer(content: view.frame(width: size.width, height: size.height, alignment: alignment))
+    private static func capture<V: View>(_ view: V, size: CGSize, alignment: Alignment = .center,
+                                         pageBackground: ColorScheme? = nil, to path: String) {
+        let framed = view.frame(width: size.width, height: size.height, alignment: alignment)
+        let content = pageBackground.map { AnyView(framed.background(Theme.pageBackground).environment(\.colorScheme, $0)) }
+            ?? AnyView(framed)
+        let renderer = ImageRenderer(content: content)
         renderer.scale = 2
         guard let image = renderer.nsImage,
               let tiff = image.tiffRepresentation,

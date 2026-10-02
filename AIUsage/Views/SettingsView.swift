@@ -87,7 +87,7 @@ struct SourcesSettings: View {
 
     private func binding(_ kind: SourceKind) -> Binding<SourceConfig> {
         Binding(
-            get: { store.sourceConfigs[kind] ?? SourceConfig(paths: kind.defaultPaths) },
+            get: { store.sourceConfigs[kind] ?? SourceConfig(paths: kind.configuredDefaultPaths) },
             set: { store.sourceConfigs[kind] = $0 }
         )
     }
@@ -230,6 +230,8 @@ struct DeviceSyncSettings: View {
     private func relative(_ d: Date?) -> String {
         guard let d else { return "从未同步" }
         let f = RelativeDateTimeFormatter()
+        // 与界面语言一致：bundle 没声明本地化，Locale.current 会落回 en（见 Formatters.dayFormatter）
+        f.locale = Locale(identifier: "zh_CN")
         f.unitsStyle = .short
         return f.localizedString(for: d, relativeTo: Date())
     }
@@ -601,7 +603,9 @@ struct DisplaySettings: View {
 
     private func reload() async {
         let records = store.records
-        let files = store.deviceSync.readAll().files
+        // 走 `archiveDeviceFiles`：演示模式下它给的是内存里那几份，
+        // 直接读 deviceSync 会去翻作者真实的 iCloud 目录（见 DemoRuntime）
+        let files = store.archiveDeviceFiles
         loaded = await Task.detached(priority: .userInitiated) {
             RetentionReport.make(records: records, deviceFiles: files)
         }.value

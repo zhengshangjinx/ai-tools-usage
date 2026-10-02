@@ -178,6 +178,8 @@ private struct DevicePopover: View {
     private func relative(_ d: Date?) -> String {
         guard let d else { return "从未同步" }
         let f = RelativeDateTimeFormatter()
+        // 与界面语言一致：bundle 没声明本地化，Locale.current 会落回 en（见 Formatters.dayFormatter）
+        f.locale = Locale(identifier: "zh_CN")
         f.unitsStyle = .short
         return f.localizedString(for: d, relativeTo: Date())
     }
