@@ -43,6 +43,7 @@ Claude Code 默认保留 30 天本地日志，过了就没了。
 | **多设备同步** | 通过 iCloud Drive 交换每日汇总档案，不依赖任何服务器 |
 | **导出** | 当前筛选结果导出 CSV / TSV / JSON，带完整口径元信息 |
 | **留存对照** | 按环境列出「本机日志还剩多少天 / 档案有多少天 / 只在档案里多少天」 |
+| **自动更新** | 设置里检查 GitHub Releases，应用内下载、校验、替换并重启；不引入任何第三方更新框架 |
 
 三个维度各一张，另有深色与几个浮层，都在 [`docs/images/`](docs/images/)：
 
@@ -105,16 +106,19 @@ processed = uncached input + cache read + cache write + output
 
 **工程。** 解析结果按 `(path, size, mtime)` 缓存，刷新只重解析变过的文件；
 界面上的每个数都有一个机器可读的出口（`--dump` / `--menu` / `--retention` / `--export`），
-排版有一组离屏快照核对（`--render`），口径有一份 174 条断言的自测（`--selftest`）。
+排版有一组离屏快照核对（`--render`），口径有一份 225 条断言的自测（`--selftest`）。
 
 ## 隐私
 
 这个 App 读的是你本机上别人写的日志文件，所以有必要说清楚它到底做了什么：
 
 - **所有数据都在本机。** 没有账号、没有遥测、没有上传。解析结果缓存在 `~/Library/Application Support/AIUsage/`。
-- **全项目只有一个对外网络请求**：启动时拉一次
+- **只对外发两个请求，都是 GET，都不带任何能指到你的东西。** ①启动时拉一次
   [LiteLLM 的 `model_prices_and_context_window.json`](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)
-  用来计价（6 小时内不重复拉）。可以在断网环境下用，只是价格表用缓存。
+  用来计价；②每 6 小时最多拉一次本仓库的 GitHub 发布列表，看有没有新版本（可以在「关于」页关掉）。
+  更新请求里只有一个固定的 `User-Agent: AIUsage/<版本>` 和 GitHub 要求的 API 版本头 ——
+  没有设备标识、没有用量、没有你机器上的任何数据。两条都带 6 小时闸门，断网也能用，
+  只是价格表走缓存、更新检查不吭声。
 - **不读任何凭据。** 留存功能会看 `~/.claude/settings.json`，但**只读 `cleanupPeriodDays` 这一个键**，
   用 `JSONSerialization` 取出来就完事 —— 那个文件里有 `ANTHROPIC_AUTH_TOKEN` 之类的凭据，
   本 App **不碰、不打印、不记录、更不写回**。
@@ -174,6 +178,34 @@ xcodegen generate && open AIUsage.xcodeproj
 > `scripts/export-dir.local`（该文件在 `.gitignore` 里）。
 
 自己编出来的这份和 Releases 里那份是同一条构建路径，所以也一样是 ad-hoc 签名。
+
+## 自动更新
+
+设置窗口左下角钉着一行版本状态。发现新版本时它变成「**更新到 0.2.0**」，点一下就在应用内把包下回来、
+校验、解压、验包体；**下完不会直接动手**，会停下来再问一次「重启并更新到 x.y.z」，旁边永远有一个「稍后」。
+确认之后 App 退出，由一个脱离进程的脚本替换 `/Applications` 里那一份并重新启动它
+（先退出再替换，不做运行中换 bundle；替换失败会把旧版本 `mv` 回来 —— 宁可让你留在旧版本，
+也不会让你手里没有 App）。App 正跑在 `/AppTranslocation/` 里（直接从下载目录双击打开的那种）
+或所在目录不可写时会提前拒绝，让你手动替换。
+
+![设置 · 关于](docs/images/settings-about.png)
+
+检查更新只发一个 GET 拉公开的发布列表，不发送任何本机信息，6 小时最多一次，可以在「关于」页关掉。
+用的是 `/releases` 而不是 `/releases/latest` —— 后者的语义是「最新的**正式**版」，本仓库的发布挂在
+prerelease 上时它会直接 404。
+
+**包名口径。** 发布资产固定叫 `AiToolsUsage-<版本>-macos-universal.zip`（`scripts/export.sh` 保证，
+只有 Debug 包才带时间戳）。更新器优先精确匹配这个名字；匹配不上时，只有在候选 zip 唯一的情况下才敢用 ——
+猜错的症状是「提示你升 0.2.0，装上去还是旧的」，很难查。
+
+**安全姿态，照实说。** 能验的是：全程 HTTPS；下载地址与**每一次重定向**的 host 都在白名单里
+（发布资产会 302 到 `release-assets.githubusercontent.com`）；长度；发布正文里公布的 SHA-256；
+包体结构（bundle id、可执行文件名、版本号必须与 tag 一致，拦「tag 写 0.2.0、包里是 0.1.0」）；
+版本严格递增（不降级、不等价重装）。**验不了的是「这个包是谁做的」**：本 App 是 ad-hoc 签名、
+没有开发者证书，`codesign --verify` 只证明**这个包自身是完整的**，任何人都能 ad-hoc 签一个自己的 bundle。
+所以这一串防的是**损坏与下载截断，不是伪造** —— 真正的信任来源仍然只有「HTTPS + GitHub 账号没被攻破」，
+和上面那套安装说明是同一个信任故事。要真边界得引入签名密钥（公钥内嵌进 App、发布时离线签），
+那是另一个量级的事，目前没做。
 
 ## 菜单栏
 
@@ -264,7 +296,7 @@ APP="build/Build/Products/Release/AI Usage.app/Contents/MacOS/AI Usage"
 | `--dump [天数]` | 打印汇总，默认 90 天。**天数写裸整数**：`--dump 7`。写成 `--dump "7 days"` 不报错但**不生效** —— 解析用的是 `Int($0)`，解析不出来就一声不响地退回 90 天 |
 | `--menu` | 菜单栏摘要（固定窗口：今日 / 本月 / 近 7 天），末尾另打一行 `label:` —— 那是菜单栏上**真正显示的那行字**（由你的配置拼出来）。数字对得上不等于那行字对：「今日 $ $16.86」这种拼写毛病只有把拼好的串打出来才看得见 |
 | `--retention` | 留存对照表。只打印 `cleanupPeriodDays` 这**一个**值，不碰 `~/.claude/settings.json` 里的其它内容 |
-| `--selftest` | 174 条断言，失败退出码非 0 |
+| `--selftest` | 225 条断言，失败退出码非 0 |
 | `--render <目录>` | 离屏快照（`TextEditor` / `Form` / `Menu` 这类 AppKit 承载的视图走真实 `NSWindow` 抓图，见 `RenderHarness.captureWindow`；高度由内容决定的视图自己量，见 `captureFitting`） |
 | `--bench` | 主界面光栅化耗时中位数 |
 | `--export <目录> [csv\|tsv\|json] [device\|model\|day]` | 按维度导出三种格式，逐字节可核对 |
@@ -295,6 +327,7 @@ AIUsage/
 ├── Retention/                 留存对照
 ├── Export/                    CSV / TSV / JSON 导出
 ├── MenuBar/                   菜单栏配置与面板
+├── Update/                    检查 GitHub Releases、下载校验、替换 bundle
 ├── Views/                     主界面与组件
 └── Util/                      格式化、主题令牌
 scripts/

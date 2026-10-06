@@ -11,6 +11,11 @@ struct AIUsageApp: App {
     /// 关窗行为（「关掉主窗口后留在菜单栏」）。语义上是 App 生命周期，与菜单栏显示配置无关，
     /// 所以单独一个对象，没有并进 `MenuBarSettings`（理由见 `AppBehaviorSettings` 开头）。
     @StateObject private var behavior: AppBehaviorSettings
+    /// 检查更新。同样在 `init` 里显式建出来，理由与 `menuBar` 那一段相同：
+    /// 自动检查要挂在主窗口的 `.task` 上，而那个 Task 得拿到**同一个**实例。
+    @StateObject private var update: UpdateService
+    /// 更新配置。**与 `update` 共用同一个实例**，单独注入是为了让「关于」页能绑它的开关。
+    @StateObject private var updateSettings: UpdateSettings
 
     init() {
         // 第一件事：`--demo` 的退出清理挂上去。必须早于下面任何一处会读配置域的地方 ——
@@ -29,6 +34,9 @@ struct AIUsageApp: App {
         _menuBar = StateObject(wrappedValue: menuBar)
         let behavior = AppBehaviorSettings()
         _behavior = StateObject(wrappedValue: behavior)
+        let updateSettings = UpdateSettings()
+        _updateSettings = StateObject(wrappedValue: updateSettings)
+        _update = StateObject(wrappedValue: UpdateService(settings: updateSettings))
         // 只注册观察者，一个 NSApp 都不碰 —— 这一刻 App 还没起完，NSApp 是 nil。见 WindowLifecycle 开头
         WindowLifecycle.install(behavior: behavior, menuBar: menuBar)
         // 三个「跑完就打印一行行文本再退出」的出口。都走同一条路：**换扫描 → 现算 → 打印 → exit**，
@@ -89,6 +97,10 @@ struct AIUsageApp: App {
                 .task {
                     await pricing.loadCachedThenRefresh()
                     await store.refresh()
+                    // 检查更新挂在主窗口的 `.task` 上：本 App 启动就有主窗口
+                    // （见 ActivationPolicyController），这条路径是可靠的。
+                    // 该不该查（演示模式 / 无头工装 / 开关 / 6 小时闸门）全在 `checkIfDue` 里判。
+                    await update.checkIfDue()
                 }
         }
         .windowStyle(.hiddenTitleBar)
@@ -119,6 +131,8 @@ struct AIUsageApp: App {
                 .environmentObject(pricing)
                 .environmentObject(menuBar)
                 .environmentObject(behavior)
+                .environmentObject(update)
+                .environmentObject(updateSettings)
         }
     }
 }
@@ -194,6 +208,12 @@ enum RenderHarness {
         // 设置页要读关窗行为那个开关，缺了它会直接崩（`@EnvironmentObject` 取不到就 fatalError）。
         // 同样只能用默认值：这个对象也是 `didSet` 就写 UserDefaults。
         let behavior = AppBehaviorSettings()
+        // 设置页现在多了「关于」一页，它读 `UpdateService` 与 `UpdateSettings`；
+        // 缺任何一个同样是 fatalError，整个出图当场死。
+        // 演示模式下 `UpdateService` 构造出来就带着那条编好的更新（见它的 init），
+        // 所以侧栏底部那行提示在截图里画得出来 —— 不用在这里手工摆状态。
+        let updateSettings = UpdateSettings()
+        let update = UpdateService(settings: updateSettings)
         // Form / TextEditor 这类 AppKit 承载的控件只认 NSAppearance、不认 \.colorScheme 环境值，
         // 两种外观都要设：环境值管 SwiftUI 自绘，NSApp.appearance 管 AppKit 控件。
         // 主体不能套 ScrollView —— 懒加载内容不会进离屏快照，所以直接用 DashboardBody。
@@ -216,27 +236,21 @@ enum RenderHarness {
             // 出来的其实**是纯空白** —— `settings-devices-light.png` 与 `settings-display-light.png`
             // 连 md5 都一样（`2e3c7483…`），也就是说那两张图从加进来那天起什么都没验证过。
             // 原因是 `Form { }.formStyle(.grouped)` 由 AppKit 承载、按需铺排，`ImageRenderer`
-            // 拿不到它的内容；跟 `TabView` 无关（当时那句注释把责任记错了）。
-            // 现在改成真挂一个 NSWindow 再 cache 出来，`Form` 才画得出来。
-            await captureWindow(SettingsView().environmentObject(store).environmentObject(pricing).environmentObject(menuBar).environmentObject(behavior).environment(\.colorScheme, scheme),
-                                size: CGSize(width: 680, height: 620), to: "\(dir)/settings-\(name).png")
-            // 单个页签各出一张：设置窗口只有 680 宽，一屏只看得到一个页签，
-            // 而 TabView 的一屏到底停在哪个页签上是运行期状态，不能指望
-            await captureWindow(DeviceSyncSettings().environmentObject(store).environmentObject(pricing).environmentObject(menuBar).environmentObject(behavior).environment(\.colorScheme, scheme),
-                                size: CGSize(width: 680, height: 620), to: "\(dir)/settings-devices-\(name).png")
-            // 「数据源」那一页此前没有快照：它是唯一一页把全部十个工具、各自能拿到什么口径
-            // （token 明细 / 仅会话 / 不可读）和本机默认路径一次列全的地方，README 要用它。
-            await captureWindow(SourcesSettings().environmentObject(store).environmentObject(pricing).environmentObject(menuBar).environmentObject(behavior).environment(\.colorScheme, scheme),
-                                size: CGSize(width: 680, height: 620), to: "\(dir)/settings-sources-\(name).png")
-            // 留存那一页的行数随环境数走，620 是设置窗口的高度、内容更高就自己滚，
-            // 快照只核对「看得见的那一屏」排版对不对。
-            // **必须注入报告**：那一页的数据是在 `.task` 里算的，而离屏工装不跑 `.task`，
-            // 不注入就只能拍到「正在统计…」的占位。现算一份真的进去（只读，不改任何东西）。
+            // 拿不到它的内容。现在设置页虽然换成了自绘的白卡，但里面仍有 `TextEditor` /
+            // `TextField` / `Toggle` 这些 AppKit 控件（它们同样画不出来），所以继续走真窗口。
+            //
+            // 四张都拍**整个外壳**（侧栏 + 详情），这样 README 的每张设置图都带得上导航。
+            // 尺寸统一读 `SettingsView.size` —— 别再写第二处常量。
+            // 留存那一页**必须注入报告**：它的数据在 `.task` 里算，而离屏工装不跑 `.task`，
+            // 不注入就只能拍到「正在统计…」的占位（现算一份真的进去，只读，不改任何东西）。
             let retention = RetentionReport.make(records: store.records,
                                                  deviceFiles: store.archiveDeviceFiles)
-            await captureWindow(DisplaySettings(injectedReport: retention)
-                        .environmentObject(store).environmentObject(pricing).environmentObject(menuBar).environmentObject(behavior).environment(\.colorScheme, scheme),
-                    size: CGSize(width: 680, height: 620), to: "\(dir)/settings-display-\(name).png")
+            for pane in SettingsPane.allCases {
+                await captureWindow(settingsShot(pane: pane, retention: retention, store: store, pricing: pricing,
+                                                 menuBar: menuBar, behavior: behavior,
+                                                 update: update, updateSettings: updateSettings, scheme: scheme),
+                                    size: SettingsView.size, to: "\(dir)/settings-\(pane.rawValue)-\(name).png")
+            }
             // 菜单栏那张富面板本身是普通视图，直接渲染就能核对排版。
             // 高度不写死，让工装自己量（面板有几行、开了几个区块都会影响高度）。
             // 六项全勾的面板更高，但工装**只能出默认配置这一张** —— 改配置会写用户自己的 UserDefaults。
@@ -298,6 +312,25 @@ enum RenderHarness {
     }
 
     static var benchMode: Bool { CommandLine.arguments.contains("--bench") }
+
+    /// 设置页快照的公共装配。抽出来只为一件事：**别再漏注入**。
+    /// `@EnvironmentObject` 取不到就是 `fatalError`，而出图工装会一口气拍五页 ——
+    /// 漏一个不是少一张图，是整个 `--render` 当场死（`behavior` 已经为这个坑记过一次账）。
+    @MainActor
+    private static func settingsShot(pane: SettingsPane, retention: RetentionReport,
+                                     store: UsageStore, pricing: PricingService,
+                                     menuBar: MenuBarSettings, behavior: AppBehaviorSettings,
+                                     update: UpdateService, updateSettings: UpdateSettings,
+                                     scheme: ColorScheme) -> some View {
+        SettingsView(injectedRetention: retention, initialPane: pane)
+            .environmentObject(store)
+            .environmentObject(pricing)
+            .environmentObject(menuBar)
+            .environmentObject(behavior)
+            .environmentObject(update)
+            .environmentObject(updateSettings)
+            .environment(\.colorScheme, scheme)
+    }
 
     /// `--bench`：把整页光栅化几遍报中位数。
     ///
@@ -377,6 +410,9 @@ enum RenderHarness {
         override var canBecomeKey: Bool { true }
     }
 
+    /// 「App 没被激活」这件事只报一次 —— 一趟出图要截二十多张，每张都喊一遍就没人看了。
+    @MainActor private static var warnedInactive = false
+
     @MainActor
     private static func captureWindow<V: View>(_ view: V, size: CGSize, to path: String) async {
         let host = NSHostingView(rootView: view)
@@ -391,6 +427,21 @@ enum RenderHarness {
         host.layoutSubtreeIfNeeded()
         try? await Task.sleep(nanoseconds: 300_000_000)
         host.layoutSubtreeIfNeeded()
+        // 光把窗口做成 key 还不够：**AppKit 控件的强调色只在 App 处于激活态时才画得出来**。
+        // 从终端前台直接跑二进制时系统通常会把进程带到前台，从脚本 / 沙箱 / CI 里跑就不会 ——
+        // 那样截出来的开关全是灰的，看着像所有数据源都被关掉了，而 `shoot.sh` 会照常把这张图
+        // 拷进 `docs/images/`（2026-10-07 真出过一次，对照旧图才看出来）。
+        // 这里不替调用方去激活（理由同上），只把话说清楚：这种图不算数。
+        if !NSApp.isActive, !warnedInactive {
+            warnedInactive = true
+            print("""
+            ⚠️ 出图时 App 没有激活（NSApp.isActive = false，窗口 isKeyWindow = \(window.isKeyWindow)）：
+               截图里的开关等 AppKit 控件会画成灰色的「窗口没激活」样式，看着像全部关掉了。
+               **这一批图不能进仓库**，请从终端前台重跑 ——
+               或者不要直接跑二进制，改成走 LaunchServices（系统会把它带到前台）：
+               open -n -W -a "$(pwd)/build/Build/Products/Release/AI Usage.app" --args --render <目录> --demo
+            """)
+        }
         guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
             print("window capture failed: \(path)"); return
         }

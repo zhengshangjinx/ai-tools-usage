@@ -99,6 +99,21 @@ enum Formatters {
         return f
     }()
 
+    /// 「10月7日 00:22」：设置页里那几个时刻（价格表更新于 / 上次扫描 / 上次检查更新）。
+    ///
+    /// 那几处原来写的是 `date.formatted(date: .abbreviated, time: .shortened)`，
+    /// 它走 `Locale.current` —— 而本 bundle 一个本地化都没声明、`Locale.current` 会落到 en，
+    /// 于是通篇中文的界面里印出的是 "Oct 7, 2026 at 0:22"。同一个坑 `dayFormatter` 上面已经记过一笔，
+    /// 这里是把设置页那三处也收进来。
+    static let stampFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "zh_CN")
+        f.setLocalizedDateFormatFromTemplate("MMMdHHmm")
+        return f
+    }()
+
     static func dayLabel(_ d: Date) -> String { fullDayFormatter.string(from: d) }
     static func shortDay(_ d: Date) -> String { dayFormatter.string(from: d) }
+    /// 时刻（含分钟）。见 `stampFormatter`。
+    static func stamp(_ d: Date) -> String { stampFormatter.string(from: d) }
 }

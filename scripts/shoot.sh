@@ -37,7 +37,18 @@ DOMAIN=com.local.aiusage
 snapshot() { defaults export "$DOMAIN" - 2>/dev/null | plutil -convert xml1 -o - - 2>/dev/null; }
 before="$(snapshot)"
 
-"$APP" --render "$TMP" --demo
+# 出图要的是「用户看到的那一屏」，而 AppKit 控件的强调色只在 **App 处于激活态**时才画得出来
+# （光把窗口做成 key 不够）。直接跑二进制时进程会不会被系统带到前台，取决于它是从哪儿拉起来的：
+# 交互式终端里通常会，从脚本 / CI / 非交互 shell 里就不会 —— 那样截出来的十来个开关**全是灰的**，
+# 看着像所有数据源都被关掉了，而它们应该是蓝的。
+# 所以：先直接跑（这样能拿到退出码与 stdout），工装一旦报「App 没激活」，就改走 LaunchServices
+# 重跑一次 —— 系统会把用 `open` 拉起来的 App 带到前台。两种环境都能出对图，不用人来记得。
+RENDER_LOG="$TMP/render.log"
+"$APP" --render "$TMP" --demo 2>&1 | tee "$RENDER_LOG"
+if grep -q "出图时 App 没有激活" "$RENDER_LOG"; then
+    echo "→ 直接跑的进程没被带到前台，改走 LaunchServices 重跑一次" >&2
+    open -n -W -a "$APP" --args --render "$TMP" --demo
+fi
 
 after="$(snapshot)"
 if [ "$before" != "$after" ]; then
@@ -66,6 +77,7 @@ copy main-light-model.png       main-model.png
 copy main-light-day.png         main-day.png
 copy settings-sources-light.png settings-sources.png
 copy settings-display-light.png settings-display.png
+copy settings-about-light.png   settings-about.png
 copy menubar-panel-light.png    menubar-panel.png
 copy model-detail-light.png     model-detail.png
 

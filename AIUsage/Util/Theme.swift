@@ -39,6 +39,18 @@ enum Theme {
     static let segmentBackground = dynamic(light: NSColor(hex: 0xE9EDF3), dark: NSColor(hex: 0x2A2A33))
     static let tableHeader = dynamic(light: NSColor(hex: 0xF9FAFB), dark: NSColor(hex: 0x23232A))
 
+    // 输入控件的底与边（设置页的输入框、多行编辑器）。
+    // 卡片本来就是白的，输入框再白一层就分不出边界 —— 所以填一档比卡片**浅**的底（深色下反过来，比卡片亮），
+    // 再补一道比 `cardBorder` 略重的边：这一道要说的不是「这里有个卡片」而是「这里可以打字」。
+    static let fieldBackground = dynamic(light: NSColor(hex: 0xF8F9FB), dark: NSColor(hex: 0x25252C))
+    static let fieldBorder = dynamic(light: NSColor(hex: 0xDCE0E8), dark: NSColor(hex: 0x3A3A44))
+
+    // 设置窗口的两列。侧栏底色比页面底各**深/浅一档**：这样两列不用硬边框就分得开，
+    // 而深色下侧栏比内容略亮，与 macOS 对「这一列是窗口镶边」的读法一致。
+    static let sidebarBackground = dynamic(light: NSColor(hex: 0xF0F2F5), dark: NSColor(hex: 0x18181C))
+    /// 设置窗口里那条竖分隔线。比 `cardBorder` 略重一点 —— 它要分开的是两个面，不是卡片的边。
+    static let paneDivider = dynamic(light: NSColor(hex: 0xE6E9EF), dark: NSColor(hex: 0x2A2A33))
+
     // 图表 chrome：网格与轴是实线发丝线（禁用虚线），各比载体深一档，保持退让
     static let gridline = dynamic(light: NSColor(hex: 0xEDEFF3), dark: NSColor(hex: 0x2E2E36))
     static let axisLine = dynamic(light: NSColor(hex: 0xDFE3EA), dark: NSColor(hex: 0x3A3A44))

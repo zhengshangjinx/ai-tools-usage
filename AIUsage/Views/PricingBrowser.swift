@@ -85,9 +85,9 @@ struct PricingBrowser: View {
     private func pager(pageCount: Int, current: Int) -> some View {
         HStack(spacing: 6) {
             Button("上一页") { page = max(0, current - 1) }
-                .controlSize(.small).disabled(current == 0)
+                .settingsButton(compact: true).disabled(current == 0)
             Button("下一页") { page = min(pageCount - 1, current + 1) }
-                .controlSize(.small).disabled(current >= pageCount - 1)
+                .settingsButton(compact: true).disabled(current >= pageCount - 1)
         }
     }
 
@@ -125,8 +125,10 @@ struct PricingBrowser: View {
             priceCell(p?.input); priceCell(p?.cacheRead); priceCell(p?.cacheWrite); priceCell(p?.output)
             Group {
                 if let p {
+                    // 普通档而不是主色：一页五十行，满屏实心蓝按钮会把整张表压成一片蓝底
                     Button("覆盖") { onOverride(key, p) }
-                        .controlSize(.mini).help("把这条价格填进下方的手动单价表单")
+                        .settingsButton(compact: true)
+                        .help("把这条价格填进下方的手动单价表单")
                 }
             }
             .frame(width: 46, alignment: .trailing)

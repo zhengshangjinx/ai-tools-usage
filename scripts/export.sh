@@ -53,10 +53,25 @@ done
 codesign --force --deep --sign - "$APP_PATH" >/dev/null 2>&1 || true
 
 mkdir -p "$DEST_DIR"
-STAMP="$(date +%Y%m%d-%H%M)"
+# 包名分两种，**Release 的那个必须稳定**：
+#
+# 它是发布资产，名字要同时对上三处 —— README 里写给用户的
+# `AiToolsUsage-<版本>-macos-universal.zip`、线上已发布的 v0.1.0、以及 App 内置更新器
+# （`UpdatePolicy.selectAsset` 优先精确匹配这个名字）。
+# 原先一律拼 `YYYYMMDD-HHMM`，同一个版本会攒出好几个包，更新器只能靠猜 ——
+# 而猜错的症状是「提示你升 0.2.0，装上去还是旧的」，很难查。
+#
+# 所以：Release 用固定的 `macos-universal`，**不带时间戳**；Debug 才带，它不进发布页，
+# 而且连着构建几次不该互相覆盖。
+STAMP=""
 SUFFIX=""
-[[ "${CONFIGURATION:-Release}" == "Release" ]] || SUFFIX="-$(echo "$CONFIGURATION" | tr '[:upper:]' '[:lower:]')"
-ZIP="$DEST_DIR/$NAME-$VERSION-$STAMP$SUFFIX.zip"
+TAG="macos-universal"
+if [[ "${CONFIGURATION:-Release}" != "Release" ]]; then
+  STAMP="$(date +%Y%m%d-%H%M)"
+  SUFFIX="-$(echo "$CONFIGURATION" | tr '[:upper:]' '[:lower:]')"
+  TAG="$STAMP"
+fi
+ZIP="$DEST_DIR/$NAME-$VERSION-$TAG$SUFFIX.zip"
 ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP"
 
 # 同时保留一份可直接双击的最新 .app

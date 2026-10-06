@@ -40,6 +40,7 @@ This app gathers those scattered logs into one ledger and solves three things:
 | **Multi-device sync** | Exchanges daily aggregate archives through iCloud Drive — no server involved |
 | **Export** | Current filtered result to CSV / TSV / JSON, with full methodological metadata |
 | **Retention report** | Per environment: how many days of local logs are left vs. how many the archive holds |
+| **Automatic updates** | Checks GitHub Releases from Settings and downloads, verifies, swaps and relaunches in-app; no third-party update framework |
 
 One shot per breakdown, plus a dark one and a few overlays — all in [`docs/images/`](docs/images/):
 
@@ -105,16 +106,20 @@ as `Unpriced` rather than `$0.00`.
 
 **Engineering.** Parse results are cached by `(path, size, mtime)` so a refresh re-parses only changed files;
 every number in the UI has a machine-readable outlet (`--dump` / `--menu` / `--retention` / `--export`), the
-layout has a set of offscreen snapshots (`--render`), and the accounting has 174 assertions (`--selftest`).
+layout has a set of offscreen snapshots (`--render`), and the accounting has 225 assertions (`--selftest`).
 
 ## Privacy
 
 This app reads log files that other programs wrote on your machine, so it's worth being precise about what it does:
 
 - **Everything stays local.** No account, no telemetry, no upload. Parse results are cached under `~/Library/Application Support/AIUsage/`.
-- **Exactly one outbound request in the whole project**: at launch it fetches
+- **Exactly two outbound requests, both GETs, neither carrying anything that points back at you.** ① At launch it fetches
   [LiteLLM's `model_prices_and_context_window.json`](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)
-  for pricing (not refetched within 6 hours). It works offline — you just keep using the cached price table.
+  for pricing; ② at most once every 6 hours it fetches this repo's public GitHub release list to see whether a newer
+  version exists (you can turn that off under Settings → About). The update request carries a fixed
+  `User-Agent: AIUsage/<version>` and the API version header GitHub asks for — no device identifier, no usage data,
+  nothing from your machine. Both are gated to once per 6 hours and both work offline: you just keep the cached
+  price table, and the update check simply stays quiet.
 - **It never reads credentials.** The retention feature looks at `~/.claude/settings.json`, but reads **only the `cleanupPeriodDays` key**, pulled out with `JSONSerialization`. That file also holds credentials such as `ANTHROPIC_AUTH_TOKEN`; this app does not touch them, print them, log them, or write the file back.
 - **The app is not sandboxed** (`com.apple.security.app-sandbox = false`) — it has to read the per-vendor data directories listed above. That is also why it isn't on the App Store.
 - **Sync is file-level.** Multi-device sync goes through a directory in your own iCloud Drive and exchanges daily aggregate archives (`device-<deviceId>.json`, containing only token buckets and session counts). The archives contain **no** session ids, no prompt content, and no costs.
@@ -174,6 +179,39 @@ Re-run `xcodegen generate` after adding Swift files.
 > `scripts/export-dir.local` (which is gitignored).
 
 Your own build comes off the same pipeline as the one in Releases, so it is ad-hoc signed too.
+
+## Automatic updates
+
+The bottom of the settings sidebar is pinned to a line of version status. When a newer version exists it turns into
+"**Update to 0.2.0**"; one click downloads the archive in-app and verifies it — size, SHA-256, archive structure,
+bundle identity. It **does not touch anything yet**: it stops and asks again with "Restart and update to x.y.z", and
+"Later" is always right next to it. Once you confirm, the app quits and a detached shell script replaces the copy in
+`/Applications` and relaunches it (quit first, then swap — never a swap while running; if the copy fails the old
+version is moved back, because being left on the old version beats being left with no app at all). If the app is
+running from `/AppTranslocation/` (double-clicked straight out of your Downloads folder) or its directory isn't
+writable, it refuses up front and tells you to replace it by hand.
+
+![Settings · About](docs/images/settings-about.png)
+
+The check is a single GET of the public release list. It sends nothing about your machine, runs at most once every
+6 hours, and can be switched off under Settings → About. It uses `/releases` rather than `/releases/latest` — the
+latter means "latest **stable** release", and returns 404 outright when a repo's releases are prereleases.
+
+**Asset naming.** Release assets are always called `AiToolsUsage-<version>-macos-universal.zip`
+(`scripts/export.sh` guarantees it; only Debug builds get a timestamp). The updater prefers an exact match on that
+name, and falls back to a single candidate only when there is exactly one — guessing wrong shows up as "it offered
+0.2.0 and installed the old one", which is miserable to debug.
+
+**Security posture, stated plainly.** What it *can* verify: HTTPS throughout; the download URL and **every redirect**
+land on an allowlisted host (release assets 302 to `release-assets.githubusercontent.com`); the length; the SHA-256
+published in the release notes; the bundle's structure (bundle id, executable name and version must match the tag,
+which catches "tag says 0.2.0, archive contains 0.1.0"); and strictly increasing versions (no downgrade, no
+equivalent reinstall). What it *cannot* verify is **who built the archive**: this app is ad-hoc signed with no
+developer certificate, so `codesign --verify` only proves that **the bundle is internally intact** — anyone can
+ad-hoc sign a bundle of their own. So all of the above guards against **corruption and truncated downloads, not
+forgery**; the only real trust anchor remains "HTTPS plus GitHub's account not being compromised", which is the same
+trust story as the installation instructions above. A real boundary would need a signing key (public key baked into
+the app, releases signed offline) — a different order of magnitude, and not done here.
 
 ## Menu bar
 
@@ -257,7 +295,7 @@ APP="build/Build/Products/Release/AI Usage.app/Contents/MacOS/AI Usage"
 | `--dump [days]` | Prints the summary, 90 days by default. **Pass a bare integer**: `--dump 7`. `--dump "7 days"` doesn't error but **silently does nothing** — it parses with `Int($0)` and falls back to 90 days when that fails |
 | `--menu` | Menu bar summary (fixed windows: today / this month / last 7 days), plus a final `label:` line — the string actually shown in the menu bar, assembled from your configuration. Matching numbers don't mean the string is right: defects like `今日 $ $16.86` are only visible once the assembled string is printed |
 | `--retention` | Retention table. Prints the `cleanupPeriodDays` value **only** and touches nothing else in `~/.claude/settings.json` |
-| `--selftest` | 174 assertions; non-zero exit on failure |
+| `--selftest` | 225 assertions; non-zero exit on failure |
 | `--render <dir>` | Offscreen snapshots (views backed by AppKit — `TextEditor`, `Form`, `Menu` — go through a real `NSWindow`, see `RenderHarness.captureWindow`; views whose height follows their content measure themselves, see `captureFitting`) |
 | `--bench` | Median rasterization time for the main window |
 | `--export <dir> [csv\|tsv\|json] [device\|model\|day]` | Export in three formats per breakdown, byte-for-byte checkable |
@@ -289,6 +327,7 @@ AIUsage/
 ├── Retention/                 Retention report
 ├── Export/                    CSV / TSV / JSON export
 ├── MenuBar/                   Menu bar configuration and panel
+├── Update/                    GitHub Releases check, download verification, bundle swap
 ├── Views/                     Main window and components
 └── Util/                      Formatting, theme tokens
 scripts/

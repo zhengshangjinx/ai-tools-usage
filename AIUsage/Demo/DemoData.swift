@@ -74,6 +74,32 @@ enum DemoData {
         "qwen3-coder-plus": .perMillion(input: 1, output: 5),
     ]
 
+    // MARK: 更新
+
+    /// 演示里侧栏底部那条「更新到 x.y.z」。**版本号从当前 bundle 版本推出来，不写死** ——
+    /// 写死的话 `MARKETING_VERSION` 一抬，这条就变成「已是最新」，截图里那行提示会**静默消失**，
+    /// 而图照样会被 `shoot.sh` 拷进仓库。与 `appVersion` 是同一个教训（见本文件开头）。
+    ///
+    /// 只抬次版本号，不动主版本：`0.1.0` → `0.2.0`。
+    static var availableUpdate: ReleaseInfo {
+        let current = SemanticVersion.parse(appVersion) ?? SemanticVersion(major: 0, minor: 1, patch: 0)
+        let next = SemanticVersion(major: current.major, minor: current.minor + 1, patch: 0)
+        let tag = "v\(next)"
+        let name = UpdatePolicy.canonicalAssetName(next)
+        let base = "https://github.com/\(UpdatePolicy.owner)/\(UpdatePolicy.repo)/releases"
+        return ReleaseInfo(
+            version: next,
+            tag: tag,
+            pageURL: URL(string: "\(base)/tag/\(tag)")!,
+            notes: "演示用的发布说明。",
+            // 固定的假摘要，只为让「关于」页把校验和那一行也画出来；演示模式不会真的去核它
+            checksum: String(repeating: "0a", count: 32),
+            asset: ReleaseAsset(name: name,
+                                url: URL(string: "\(base)/download/\(tag)/\(name)")!,
+                                size: 2_514_069)
+        )
+    }
+
     // MARK: 生成
 
     /// 一个工具在一台设备上的用量形状。

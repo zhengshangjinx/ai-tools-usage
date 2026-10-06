@@ -20,12 +20,13 @@ xcodegen generate && ./scripts/build.sh
 | `main-day.png` | 「按日期」维度 | `main-light-day.png` |
 | `settings-sources.png` | 设置 · 数据源：每个工具能不能拿到 token 明细、默认扫哪里 | `settings-sources-light.png` |
 | `settings-display.png` | 设置 · 显示与留存：`cleanupPeriodDays` 现状与建议，下面是对照表 | `settings-display-light.png` |
+| `settings-about.png` | 设置 · 关于：版本、自动更新（左下角那一行就是更新入口）、仓库链接 | `settings-about-light.png` |
 | `menubar-panel.png` | 菜单栏点开的那块面板 | `menubar-panel-light.png` |
 | `model-detail.png` | 模型详情：单价来自哪里、四个 token 桶各占多少、缓存读省了多少 | `model-detail-light.png` |
 
 浅色和深色两套的排版完全一样，所以除了头图那一对，其余只提交浅色那张——两套都留会让这个
-目录大一倍，而要核对的东西一张就已经在里面了。设置页用 680×620（设置窗口的默认尺寸），
-主界面按 1520（`WindowFrameKeeper.designSize`）。
+目录大一倍，而要核对的东西一张就已经在里面了。设置页用 880×620（`SettingsView.size`：
+200 侧栏 + 1 分隔线 + 679 内容），主界面按 1520（`WindowFrameKeeper.designSize`）。
 
 ## 演示数据
 
@@ -57,5 +58,9 @@ grep -rhoE '演示用 [A-Za-z]+( [A-Za-z]+)?' AIUsage/Demo/ | sort -u
 grep -rn "zhengshangjin" README.md README.en.md docs/ scripts/
 ```
 
-更直接的一条：把 `docs/images/` 里的图逐张打开看一眼。八张而已，看得完——图上出现一个
+更直接的一条：把 `docs/images/` 里的图逐张打开看一眼。九张而已，看得完——图上出现一个
 你认得的项目路径或者一位真实金额，说明演示数据又漏了一处。
+
+另外**顺手核一眼开关是不是蓝的**：AppKit 控件的强调色只在 App 处于激活态时才画得出来，
+从非交互 shell 里出图的话十来个开关会全是灰的、看着像全部关掉了（工装会打印一句 ⚠️ 提醒，
+`shoot.sh` 见到它就会改走 LaunchServices 自己重跑一次）。

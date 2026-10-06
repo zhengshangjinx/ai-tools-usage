@@ -68,6 +68,7 @@ enum SelfTest {
         testRetention()
         testMenuBarLabel()
         testWindowLifecycle()
+        testUpdateLogic()
         print("\n" + String(repeating: "─", count: 46))
         if failures.isEmpty {
             print("自测通过：\(passes) 项断言全部成立")
@@ -768,7 +769,172 @@ enum SelfTest {
               AppBehaviorSettings.keepRunningKey, "general.keepRunningAfterMainWindowClose.v1")
     }
 
+    // MARK: 更新检查
+
+    /// 更新器的纯逻辑。**不联网、不落盘** —— `UpdateSupport` 与 `UpdateSettings` 能被测起来，
+    /// 靠的就是把版本比较和资产挑选从网络那条路上摘干净（见这两个文件开头）。
+    ///
+    /// 这里**不测**下载与换 bundle：那要真包、真盘、真重启，`SelfTest.swift` 开头的红线不允许
+    /// （跑自测时用户可能正开着这个 App，换掉它自己的 bundle 是最糟的一种「测试副作用」）。
+    private static func testUpdateLogic() {
+        // ── 版本解析 ──
+        equal("v 前缀去掉", SemanticVersion.parse("v0.1.0"), SemanticVersion(major: 0, minor: 1, patch: 0))
+        equal("带不带 v 是同一个版本", SemanticVersion.parse("v0.1.0"), SemanticVersion.parse("0.1.0"))
+        equal("prerelease 逐段切开", SemanticVersion.parse("1.2.3-beta.1")?.prerelease, ["beta", "1"])
+        equal("build metadata 不参与", SemanticVersion.parse("1.2.3+build.9"),
+              SemanticVersion(major: 1, minor: 2, patch: 3))
+        expect("两段版本不猜成 x.y.0", SemanticVersion.parse("1.2") == nil, "猜了就等于替发布者做决定")
+        expect("前导零是畸形", SemanticVersion.parse("v1.02.3") == nil)
+        expect("非数字是畸形", SemanticVersion.parse("abc") == nil)
+        expect("空串是畸形", SemanticVersion.parse("") == nil)
+        expect("尾巴空的 prerelease 是畸形", SemanticVersion.parse("1.0.0-") == nil)
+
+        // ── 排序：这一组是更新器最容易错的地方 ──
+        expect("**0.1.0 < 0.1.10**（字符串比较会得出反的结论，这就是那个经典 bug）",
+               SemanticVersion.parse("0.1.0")! < SemanticVersion.parse("0.1.10")!)
+        expect("正式版高于同核心版本的 prerelease",
+               SemanticVersion.parse("1.0.0-beta")! < SemanticVersion.parse("1.0.0")!)
+        expect("主版本优先于次版本", SemanticVersion.parse("2.0.0")! > SemanticVersion.parse("1.99.99")!)
+        expect("段数多的 prerelease 更大",
+               SemanticVersion.parse("1.0.0-alpha")! < SemanticVersion.parse("1.0.0-alpha.1")!)
+        expect("数字段小于字母段",
+               SemanticVersion.parse("1.0.0-1")! < SemanticVersion.parse("1.0.0-alpha")!)
+        expect("字母段按字典序",
+               SemanticVersion.parse("1.0.0-alpha")! < SemanticVersion.parse("1.0.0-beta")!)
+
+        // ── 要不要提示 ──
+        expect("更高 → 提示", SemanticVersion.isNewer(tag: "v0.2.0", than: "0.1.0"))
+        expect("**相等 → 不提示**（否则每次启动都重新提示同一个版本）",
+               !SemanticVersion.isNewer(tag: "v0.1.0", than: "0.1.0"))
+        expect("更低 → 不提示（绝不降级）", !SemanticVersion.isNewer(tag: "v0.0.9", than: "0.1.0"))
+        expect("解析不出来 → 不提示", !SemanticVersion.isNewer(tag: "latest", than: "0.1.0"))
+
+        // ── 挑资产 ──
+        let v020 = SemanticVersion(major: 0, minor: 2, patch: 0)
+        let canonical = UpdatePolicy.canonicalAssetName(v020)
+        equal("规范名与 README、export.sh 三处必须一致", canonical, "AiToolsUsage-0.2.0-macos-universal.zip")
+        equal("规范名优先",
+              UpdatePolicy.selectAsset([relAsset("AiToolsUsage-0.2.0-other.zip"), relAsset(canonical)], version: v020)?.name,
+              canonical)
+        equal("zip 胜过 dmg",
+              UpdatePolicy.selectAsset([relAsset("AiToolsUsage-0.2.0.dmg"), relAsset(canonical)], version: v020)?.name,
+              canonical)
+        expect("**版本对不上的 zip 要排除**（提示升 0.2.0、装上去还是 0.1.0 就是这么来的）",
+               UpdatePolicy.selectAsset([relAsset("AiToolsUsage-0.1.0-macos-universal.zip")], version: v020) == nil)
+        equal("只剩一个候选就是它",
+              UpdatePolicy.selectAsset([relAsset("whatever-0.2.0.zip")], version: v020)?.name, "whatever-0.2.0.zip")
+        expect("两个非规范名 → 有歧义，不猜",
+               UpdatePolicy.selectAsset([relAsset("a-0.2.0.zip"), relAsset("b-0.2.0.zip")], version: v020) == nil)
+        expect("一个 zip 都没有 → nil", UpdatePolicy.selectAsset([relAsset("x-0.2.0.dmg")], version: v020) == nil)
+
+        // ── host 白名单 ──
+        expect("api.github.com 放行", UpdatePolicy.isAllowedHost("api.github.com"))
+        expect("github.com 放行", UpdatePolicy.isAllowedHost("github.com"))
+        expect("**实测那个 302 目标必须放行**（写成 objects.githubusercontent.com 的话下载必失败）",
+               UpdatePolicy.isAllowedHost("release-assets.githubusercontent.com"))
+        expect("陌生域名拦下", !UpdatePolicy.isAllowedHost("evil.example.com"))
+        expect("nil 拦下", !UpdatePolicy.isAllowedHost(nil))
+
+        // ── 从 release 列表里挑 ──
+        let withStable = [ghRelease("v0.1.0"), ghRelease("v0.2.0")]
+        equal("同一批里取版本最高的", UpdatePolicy.pickRelease(from: withStable, current: "0.1.0")?.version,
+              SemanticVersion(major: 0, minor: 2, patch: 0))
+        expect("draft 不算数",
+               UpdatePolicy.pickRelease(from: [ghRelease("v0.9.0", draft: true)], current: "0.1.0") == nil)
+        equal("**一个正式版都没有时退回落 prerelease**（本仓库现在就是这样）",
+              UpdatePolicy.pickRelease(from: [ghRelease("v0.1.0", prerelease: true)], current: "0.0.9")?.version,
+              SemanticVersion(major: 0, minor: 1, patch: 0))
+        expect("有正式版时就不看 prerelease 了",
+               UpdatePolicy.pickRelease(from: [ghRelease("v0.2.0-rc1", prerelease: true), ghRelease("v0.1.0")],
+                                        current: "0.1.0") == nil)
+        expect("全都比当前旧 → 已是最新",
+               UpdatePolicy.pickRelease(from: [ghRelease("v0.1.0")], current: "0.1.0") == nil)
+        expect("用户跳过过的版本不再提示",
+               UpdatePolicy.pickRelease(from: [ghRelease("v0.2.0")], current: "0.1.0", skipped: "v0.2.0") == nil)
+        equal("没有 zip 资产时 asset 为 nil（界面据此退成「打开下载页」）",
+              UpdatePolicy.pickRelease(from: [ghRelease("v0.2.0", assets: [ghAsset("x-0.2.0.dmg")])],
+                                       current: "0.1.0")?.asset == nil, true)
+        equal("正文里的 SHA-256 要捞出来",
+              UpdatePolicy.pickRelease(from: [ghRelease("v0.2.0", body: "包：\n\n\(sampleDigest)  AiToolsUsage-0.2.0-macos-universal.zip\n")],
+                                       current: "0.1.0")?.checksum,
+              sampleDigest)
+        expect("正文里没有 SHA-256 就是 nil，不因此失败",
+               UpdatePolicy.pickRelease(from: [ghRelease("v0.2.0", body: "没有校验和")], current: "0.1.0")?.checksum == nil)
+
+        // ── 键名与默认值 ──
+        // **不能走 /releases/latest**：那个端点排除 prerelease，而本仓库唯一那个 release 就是 prerelease
+        // （实测 404）。改成 latest 等于把功能改成永远不提示，而且不报任何错。
+        equal("发布列表 URL 不许改成 /releases/latest",
+              UpdatePolicy.releasesURL.absoluteString,
+              "https://api.github.com/repos/zhengshangjinx/ai-tools-usage/releases?per_page=20")
+        testUpdateSettingsKeys()
+    }
+
+    /// `UpdateSettings` 的读写。用**注入的一次性 suite**，理由与 `testBehaviorSettings` 完全一样：
+    /// 这一组验的就是写入，拿 `.standard` 跑一遍等于把用户自己的开关改掉。
+    private static func testUpdateSettingsKeys() {
+        equal("自动检查键名不许随手改", UpdateSettings.autoCheckKey, "update.autoCheck.v1")
+        equal("跳过版本键名不许随手改", UpdateSettings.skippedVersionKey, "update.skippedVersion.v1")
+        equal("上次检查键名不许随手改", UpdateSettings.lastCheckKey, "update.lastCheck.v1")
+
+        let suite = "aiusage.selftest.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suite) else {
+            expect("能开出一次性 suite", false, suite)
+            return
+        }
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            // `removePersistentDomain` 只把内容清空成一份空 plist，文件壳还留在
+            // `~/Library/Preferences/` 里 —— 每跑一次自测留一个，见 testBehaviorSettings 那段账
+            let plist = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Preferences/\(suite).plist")
+            try? FileManager.default.removeItem(at: plist)
+        }
+
+        func fresh() -> UpdateSettings { UpdateSettings(defaults: defaults) }
+
+        expect("全新配置 → 默认自动检查", fresh().autoCheckEnabled)
+        fresh().autoCheckEnabled = false
+        expect("写 false 之后读回 false", !fresh().autoCheckEnabled)
+        defaults.removeObject(forKey: UpdateSettings.autoCheckKey)
+        expect("**removeObject 之后读回 true**（这条钉的是 `object(forKey:) as? Bool`）",
+               fresh().autoCheckEnabled,
+               "写成 bool(forKey:) 的话这里会得到 false —— 开关一旦关掉就再也打不开")
+
+        expect("没跳过过任何版本时是 nil", fresh().skippedVersion == nil)
+        fresh().skippedVersion = "v0.2.0"
+        equal("跳过的版本写得进读得出", fresh().skippedVersion, "v0.2.0")
+
+        expect("没检查过时 lastCheck 为 nil", fresh().lastCheck == nil)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        fresh().lastCheck = now
+        equal("lastCheck 往返不掉精度", fresh().lastCheck, now)
+    }
+
     // MARK: 工装
+
+    private static func ghRelease(_ tag: String, prerelease: Bool = false, draft: Bool = false,
+                                  assets: [GHAsset] = [], body: String? = nil) -> GHRelease {
+        GHRelease(tagName: tag, body: body, draft: draft, prerelease: prerelease,
+                  htmlURL: URL(string: "https://github.com/\(UpdatePolicy.owner)/\(UpdatePolicy.repo)/releases/tag/\(tag)")!,
+                  assets: assets)
+    }
+
+    private static func ghAsset(_ name: String, size: Int = 2_514_069) -> GHAsset {
+        GHAsset(name: name,
+                browserDownloadURL: URL(string: "https://github.com/\(UpdatePolicy.owner)/\(UpdatePolicy.repo)/releases/download/v1/\(name)")!,
+                size: size)
+    }
+
+    /// `selectAsset` 收的是已经映射好的 `ReleaseAsset`，所以挑资产那几条单用这个。
+    private static func relAsset(_ name: String, size: Int = 2_514_069) -> ReleaseAsset {
+        ReleaseAsset(name: name,
+                     url: URL(string: "https://github.com/\(UpdatePolicy.owner)/\(UpdatePolicy.repo)/releases/download/v1/\(name)")!,
+                     size: size)
+    }
+
+    /// 64 位 hex，取值照线上 v0.1.0 那份 release 正文（真实存在，不是编的）。
+    private static let sampleDigest = "713a34396f6725f22ad85db7beafc9175101b7820f109f4ec4f91a163818b3ab"
 
     private static func tempDir(_ tag: String) -> URL {
         let dir = FileManager.default.temporaryDirectory
