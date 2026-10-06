@@ -122,9 +122,28 @@ This app reads log files that other programs wrote on your machine, so it's wort
 
 ## Installation
 
+Requires macOS 14+. The published build is a universal binary, so it runs on both Apple Silicon and Intel.
+
+### Download
+
+Grab `AiToolsUsage-<version>-macos-universal.zip` from
+[Releases](https://github.com/zhengshangjinx/ai-tools-usage/releases), unzip it, and drag `AI Usage.app`
+into Applications.
+
+The app is ad-hoc signed and not notarized, so Gatekeeper blocks the first launch (it says the app is
+"damaged" or from an "unidentified developer"). **Right-click → Open**, or clear the quarantine flag:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/AI Usage.app"
+```
+
+> No paid developer account behind that notarization: this tool reads the data directories of the AI tools
+> on your own machine, and a certificate would not make it any more trustworthy. If that bothers you,
+> build it yourself from source below.
+
 ### Build from source
 
-Source builds only, for now. Requires macOS 14+ and the Xcode command line tools.
+Xcode command line tools required.
 
 ```bash
 brew install xcodegen          # this project is managed with XcodeGen
@@ -154,7 +173,7 @@ Re-run `xcodegen generate` after adding Swift files.
 > `AIUSAGE_EXPORT_DIR="/path/to/dir" ./scripts/build.sh`, or write the directory into
 > `scripts/export-dir.local` (which is gitignored).
 
-The app is ad-hoc signed and not notarized, so the first launch needs a right-click → Open.
+Your own build comes off the same pipeline as the one in Releases, so it is ad-hoc signed too.
 
 ## Menu bar
 

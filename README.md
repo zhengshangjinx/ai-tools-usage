@@ -126,9 +126,26 @@ processed = uncached input + cache read + cache write + output
 
 ## 安装
 
+需要 macOS 14+。发布的是通用二进制，Apple Silicon 与 Intel 都能跑。
+
+### 下载
+
+到 [Releases](https://github.com/zhengshangjinx/ai-tools-usage/releases) 下载
+`AiToolsUsage-<版本>-macos-universal.zip`，解压后把 `AI Usage.app` 拖进「应用程序」。
+
+App 是 ad-hoc 签名、未做公证，首次打开会被 Gatekeeper 拦下（提示「已损坏」或「无法验证开发者」）。
+**用右键 →「打开」**，或者直接摘掉隔离属性：
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/AI Usage.app"
+```
+
+> 之所以没买开发者账号公证：这个工具要读的是你自己机器上各家 AI 工具的数据目录，
+> 花钱买证书并不会让它更可信 —— 介意的话请走下面的源码构建，自己编一个。
+
 ### 从源码构建
 
-目前只提供源码构建。需要 macOS 14+ 与 Xcode 命令行工具。
+需要 Xcode 命令行工具。
 
 ```bash
 brew install xcodegen          # 本项目用 XcodeGen 管理工程
@@ -156,7 +173,7 @@ xcodegen generate && open AIUsage.xcodeproj
 > `AIUSAGE_EXPORT_DIR="/path/to/dir" ./scripts/build.sh`，或者把目录写进
 > `scripts/export-dir.local`（该文件在 `.gitignore` 里）。
 
-App 是 ad-hoc 签名、未做公证，首次打开需要右键 →「打开」。
+自己编出来的这份和 Releases 里那份是同一条构建路径，所以也一样是 ad-hoc 签名。
 
 ## 菜单栏
 
