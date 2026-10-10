@@ -732,6 +732,7 @@ enum SelfTest {
 
         testBehaviorSettings()
         testQuitKeyShape()
+        testRefreshInterval()
     }
 
     /// ⌘Q 的按键形状。
@@ -760,6 +761,68 @@ enum SelfTest {
             expect("\(name) 放行（不是「退出」的写法）", key("q", flags).map(QuitShortcut.isQuitKey) == false)
         }
         expect("⌘W 之类的别的键放行", key("w", [.command]).map(QuitShortcut.isQuitKey) == false)
+    }
+
+    // MARK: 9. 定时刷新
+
+    /// 档位这组纯函数，外加最要命的那一条：**「从没设过」必须是 30 分钟，不是 0**。
+    ///
+    /// 读盘写成 `integer(forKey:)` 的话这里会得到 0，而 0 是「关闭」—— 默认档永远轮不到，
+    /// 新装的用户一上来就是关着的，界面上还看不出来哪里不对（下拉里就写着「关闭」，
+    /// 看着像是用户自己选的）。`AppBehaviorSettings` 为同一个坑记过一次账。
+    private static func testRefreshInterval() {
+        group("9. 定时刷新")
+
+        equal("默认档是 30 分钟", RefreshInterval.defaultMinutes, 30)
+        equal("关闭就是 0", RefreshInterval.off, 0)
+
+        // 规整：手改过 plist、或者哪天预设改了，界面上都不该出现「每 0 分钟」这种字
+        equal("负数当关闭", RefreshInterval.sanitize(-3), RefreshInterval.off)
+        equal("0 还是 0（关闭）", RefreshInterval.sanitize(0), RefreshInterval.off)
+        equal("正常值原样", RefreshInterval.sanitize(10), 10)
+        equal("超上限收到 1440", RefreshInterval.sanitize(100_000), RefreshInterval.validRange.upperBound)
+
+        // 分档：下拉里给谁打勾全靠这一条
+        equal("关闭档的文字", RefreshInterval.label(RefreshInterval.off), "关闭")
+        equal("分钟档的文字", RefreshInterval.label(10), "每 10 分钟")
+        expect("预设不算自定义", !RefreshInterval.isCustom(30))
+        expect("关闭不算自定义", !RefreshInterval.isCustom(RefreshInterval.off))
+        expect("7 分钟算自定义", RefreshInterval.isCustom(7))
+        expect("自定义预填值不落在预设上（预填了预设里的数，那一档就没有存在感）",
+               !RefreshInterval.presets.contains(RefreshInterval.customDefault))
+
+        // 读写往返。用**注入的一次性 suite**，不是 `.standard` —— 这一组验的就是写入，
+        // 拿真实配置域跑一遍等于把用户自己选的档位改掉，而且是静默改。
+        let suite = "aiusage.selftest.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suite) else {
+            expect("能开出一次性 suite", false, suite)
+            return
+        }
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            // 光 `removePersistentDomain` 不够：cfprefsd 之后会把一份**空 plist** 再写回来，
+            // 文件留在 `~/Library/Preferences/` 里（清掉内容、清不掉壳）。这里把壳扫一次，
+            // 能扫掉就当赚了 —— 它偶尔会被 cfprefsd 抢先重建，那不是这里能管的事。
+            let plist = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Preferences/\(suite).plist")
+            try? FileManager.default.removeItem(at: plist)
+        }
+
+        // 这一条单拎出来说：写成 `integer(forKey:)` 这里会得到 0，而 0 是「关闭」
+        equal("**从没设过 → 30 分钟（不是 0）**", RefreshInterval.stored(in: defaults), 30)
+        RefreshInterval.store(7, in: defaults)
+        equal("写 7 读回 7", RefreshInterval.stored(in: defaults), 7)
+        defaults.removeObject(forKey: RefreshInterval.key)
+        equal("removeObject 之后读回 30", RefreshInterval.stored(in: defaults), 30)
+        RefreshInterval.store(-9, in: defaults)
+        equal("手改 plist 塞个负数 → 当关闭", RefreshInterval.stored(in: defaults), RefreshInterval.off)
+        equal("自定义那份没设过 → 15", RefreshInterval.storedCustom(in: defaults), RefreshInterval.customDefault)
+        RefreshInterval.storeCustom(45, in: defaults)
+        equal("自定义写 45 读回 45", RefreshInterval.storedCustom(in: defaults), 45)
+
+        // 键名是有用户数据挂着的事实来源，改它等于清空所有人这个设置
+        equal("间隔键名不许随手改", RefreshInterval.key, "refresh.minutes.v1")
+        equal("自定义键名不许随手改", RefreshInterval.customKey, "refresh.customMinutes.v1")
     }
 
     /// 关窗行为这个设置项的读写。
@@ -816,6 +879,8 @@ enum SelfTest {
     /// 这里**不测**下载与换 bundle：那要真包、真盘、真重启，`SelfTest.swift` 开头的红线不允许
     /// （跑自测时用户可能正开着这个 App，换掉它自己的 bundle 是最糟的一种「测试副作用」）。
     private static func testUpdateLogic() {
+        group("10. 更新检查")
+
         // ── 版本解析 ──
         equal("v 前缀去掉", SemanticVersion.parse("v0.1.0"), SemanticVersion(major: 0, minor: 1, patch: 0))
         equal("带不带 v 是同一个版本", SemanticVersion.parse("v0.1.0"), SemanticVersion.parse("0.1.0"))

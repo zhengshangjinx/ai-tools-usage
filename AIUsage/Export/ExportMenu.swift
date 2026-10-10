@@ -95,25 +95,7 @@ struct ExportMenu: View {
     }
 }
 
-/// `NSMenu` 的动作转发：一个对象收下一串闭包，菜单项只带一个下标。
-/// 用下标而不是把闭包塞进 `representedObject` —— 后者要包一层 `NSObject`，还不如直接查表。
-@MainActor
-private final class MenuActionTarget: NSObject {
-    private var actions: [() -> Void] = []
-
-    func add(_ title: String, _ action: @escaping () -> Void) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: #selector(fire(_:)), keyEquivalent: "")
-        item.target = self
-        item.tag = actions.count
-        actions.append(action)
-        return item
-    }
-
-    @objc private func fire(_ sender: NSMenuItem) {
-        guard actions.indices.contains(sender.tag) else { return }
-        actions[sender.tag]()
-    }
-}
+/// `NSMenu` 的动作转发见 `MenuActionTarget`（两个调用方共用，已挪到 `Util/`）。
 
 // MARK: - `--export` 工装
 

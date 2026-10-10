@@ -39,6 +39,7 @@ This app gathers those scattered logs into one ledger and solves three things:
 | **Menu bar** | Today's / this month's cost, tokens and requests next to the icon; a panel with a 7-day mini bar chart on click |
 | **Multi-device sync** | Exchanges daily aggregate archives through iCloud Drive — no server involved |
 | **Export** | Current filtered result to CSV / TSV / JSON, with full methodological metadata |
+| **Scheduled refresh** | Rescans local sessions automatically: every 5 / 10 / 30 / 60 minutes, a custom interval, or off; 30 minutes by default |
 | **Retention report** | Per environment: how many days of local logs are left vs. how many the archive holds |
 | **Automatic updates** | Checks GitHub Releases from Settings and downloads, verifies, swaps and relaunches in-app; no third-party update framework |
 
@@ -106,7 +107,7 @@ as `Unpriced` rather than `$0.00`.
 
 **Engineering.** Parse results are cached by `(path, size, mtime)` so a refresh re-parses only changed files;
 every number in the UI has a machine-readable outlet (`--dump` / `--menu` / `--retention` / `--export`), the
-layout has a set of offscreen snapshots (`--render`), and the accounting has 236 assertions (`--selftest`).
+layout has a set of offscreen snapshots (`--render`), and the accounting has 256 assertions (`--selftest`).
 
 ## Privacy
 
@@ -221,6 +222,8 @@ The menu bar shows a compact string (today's cost by default). Clicking it opens
 
 The two sections are separate because the windows differ — six homogeneous numbers in a row read as six metrics of the same time window.
 
+The right end of the panel's header row holds a **scheduled refresh** dropdown (the same setting as the one in the main window's tool group — changing either updates both): every 5 / 10 / 30 / 60 minutes, a custom interval, or off. 30 minutes by default — this really does rescan local session files in the background, so how often that happens by default decides something on the user's behalf; 30 minutes sits between "numbers that aren't too stale" and "not burning I/O for nothing".
+
 The panel reads **fixed windows** (today / this month) and does not follow the date range selected in the main window.
 
 Turning "Show in menu bar" off only hides the icon. **The Dock icon is a separate mechanism**: when no real window
@@ -300,7 +303,7 @@ APP="build/Build/Products/Release/AI Usage.app/Contents/MacOS/AI Usage"
 | `--dump [days]` | Prints the summary, 90 days by default. **Pass a bare integer**: `--dump 7`. `--dump "7 days"` doesn't error but **silently does nothing** — it parses with `Int($0)` and falls back to 90 days when that fails |
 | `--menu` | Menu bar summary (fixed windows: today / this month / last 7 days), plus a final `label:` line — the string actually shown in the menu bar, assembled from your configuration. Matching numbers don't mean the string is right: defects like `今日 $ $16.86` are only visible once the assembled string is printed |
 | `--retention` | Retention table. Prints the `cleanupPeriodDays` value **only** and touches nothing else in `~/.claude/settings.json` |
-| `--selftest` | 236 assertions; non-zero exit on failure |
+| `--selftest` | 256 assertions; non-zero exit on failure |
 | `--render <dir>` | Offscreen snapshots (views backed by AppKit — `TextEditor`, `Form`, `Menu` — go through a real `NSWindow`, see `RenderHarness.captureWindow`; views whose height follows their content measure themselves, see `captureFitting`) |
 | `--bench` | Median rasterization time for the main window |
 | `--export <dir> [csv\|tsv\|json] [device\|model\|day]` | Export in three formats per breakdown, byte-for-byte checkable |

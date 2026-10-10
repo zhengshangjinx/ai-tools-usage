@@ -113,6 +113,10 @@ struct MenuBarPanel: View {
                 .foregroundStyle(Theme.gray500)
                 .lineLimit(1)
             Spacer(minLength: 8)
+            // 定时刷新。跟在主窗口工具组里那颗是同一份状态（见 `RefreshIntervalControl`），
+            // 放这一行是因为它解释的正是左边那句「几点更新」——「多久更新一次」与
+            // 「上次更新是什么时候」是同一个问题的两半，分开放两边反而要来回找。
+            RefreshIntervalControl(store: store, compact: true)
         }
         .frame(height: PanelMetric.headerHeight)
     }

@@ -144,17 +144,23 @@ struct FilterBar: View {
         }
     }
 
-    /// 刷新 + 导出 + 设置。原先这上面还挂着一个全局的 费用/Tokens 开关，左三分之二是空的，
+    /// 定时刷新 + 刷新 + 导出 + 设置。原先这上面还挂着一个全局的 费用/Tokens 开关，左三分之二是空的，
     /// 于是整行搬到日期行右端。那个开关后来**又拆掉了** —— 它管的是两张图的读法，
     /// 而每日趋势和环境分布各自有更合适的默认口径，一个全局开关两边都将就；
     /// 现在两张卡各带一个自己的开关（见 DailyChartView / DistributionView），
-    /// 这里就只剩三个动作按钮，跟着日期行靠右站，组成一个工具组。
+    /// 这里就只剩几个动作控件，跟着日期行靠右站，组成一个工具组。
     ///
-    /// 宽度账：日期胶囊 304 + 档位条 565 + 三个 34pt 按钮 102 + 按钮间距 20 + 卡内间距 16
-    /// + 页面留白 48 ≈ 1055，仍低于卡住最小窗口宽度的 1180（明细表第一列那条账，
-    /// 见 `WindowFrameKeeper.minSize`）。所以加这一个按钮不需要动 `minSize`。
+    /// 定时刷新排在手动刷新**左边**：两个都管「数据什么时候更新」，挨着放，
+    /// 而手点的那颗仍是这一组的第一个图标按钮（位置没动过，老用户不用重找）。
+    ///
+    /// 宽度账：日期胶囊 304 + 档位条 565 + 定时刷新约 92 + 三个 34pt 按钮 102
+    /// + 按钮间距 40 + 卡内间距 16 + 页面留白 48 ≈ 1167，**离最小窗口宽度 1180 只剩十几 pt**。
+    /// 定时刷新那一条因此不带图标（见 `RefreshIntervalControl`），否则这一行会被挤到
+    /// 让日期去换行 —— 日期是定长的标识符，换行处正好落在数字中间，看着像坏了。
+    /// 这一行现在靠 `--render` 的 `main-*-narrow` 那几张盯住（改这里之前先看它们）。
     private var viewOptions: some View {
         HStack(spacing: 10) {
+            RefreshIntervalControl(store: store)
             IconButton(systemName: "arrow.clockwise",
                        help: store.lastScan.map { "上次扫描 \($0.formatted(date: .omitted, time: .shortened))，耗时 \(String(format: "%.1fs", store.scanDuration))" } ?? "扫描本地会话并同步各设备",
                        disabled: store.isScanning,

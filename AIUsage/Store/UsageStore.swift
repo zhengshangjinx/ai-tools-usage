@@ -420,6 +420,15 @@ final class UsageStore: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.recompute() }
             .store(in: &cancellables)
+        // 定时刷新：每次扫描完重排下一次。挂在这里而不是塞进 `refresh()` 里，
+        // 是因为「扫描完了」还有一个来源 —— 演示模式与工装直接调 `refresh()`，
+        // 而节拍这件事只该有一个触发点（见 `scheduleAutoRefresh`）。
+        $lastScan
+            .dropFirst()
+            .sink { [weak self] _ in self?.scheduleAutoRefresh() }
+            .store(in: &cancellables)
+        // 起一次：`lastScan` 要等首次扫描才有值，而首次扫描还在主窗口的 `.task` 上
+        scheduleAutoRefresh()
     }
 
     /// 当前范围恰好等于某档「近 N 天」时返回该档，手动改过日期则为 nil
@@ -522,6 +531,56 @@ final class UsageStore: ObservableObject {
     func resync() {
         syncNow()
         recompute()
+    }
+
+    // MARK: 定时刷新
+
+    /// 自动刷新间隔（分钟，**0 = 关闭**）。主窗口工具组与菜单栏面板标题行读的是同一个值，
+    /// 所以两处永远显示同一个档位。读写与规整都在 `RefreshInterval` 里，见那个文件。
+    @Published private(set) var refreshMinutes = RefreshInterval.stored(in: DemoRuntime.defaults)
+    /// 「自定义」那一档上次填的数，只为下次打开时预填
+    @Published private(set) var customRefreshMinutes = RefreshInterval.storedCustom(in: DemoRuntime.defaults)
+
+    /// 下一次自动刷新的等待任务。**用 `Task` 而不是 `Timer`**：定时器要挂在某个 runloop 上，
+    /// 而这个 App 的窗口随时可能全关（退成纯状态栏），runloop 的来源并不稳定；
+    /// `Task.sleep` 只依赖协作式调度，窗口在不在都照跑。
+    private var autoRefreshTask: Task<Void, Never>?
+
+    /// 改档位。预设（5/10/30/60）、关闭（0）、自定义都走这里 —— 界面不该自己去写配置域。
+    func setRefreshInterval(_ minutes: Int, custom: Int? = nil) {
+        if let custom {
+            let c = RefreshInterval.sanitize(custom)
+            if c != customRefreshMinutes {
+                customRefreshMinutes = c
+                RefreshInterval.storeCustom(c, in: DemoRuntime.defaults)
+            }
+        }
+        let v = RefreshInterval.sanitize(minutes)
+        guard v != refreshMinutes else { return }
+        refreshMinutes = v
+        RefreshInterval.store(v, in: DemoRuntime.defaults)
+        scheduleAutoRefresh()
+    }
+
+    /// 按当前间隔重排下一次自动刷新。
+    ///
+    /// **每次扫描完都会被重排**（订阅 `lastScan`，见 `init`），所以它的语义是
+    /// 「距上次扫描 N 分钟」而不是一个固定节拍：刚手动点过刷新，不该过一分钟又被自动扫一遍。
+    /// 手动刷新（工具组 / 面板页脚 / 设置页）走的是同一个 `refresh()`，因此自动地一起被推后。
+    private func scheduleAutoRefresh() {
+        autoRefreshTask?.cancel()
+        autoRefreshTask = nil
+        let minutes = refreshMinutes
+        guard minutes > RefreshInterval.off else { return }
+        autoRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(minutes) * 60 * 1_000_000_000)
+                guard !Task.isCancelled, let self else { return }
+                // 上一轮还没扫完就再等一轮：`refresh()` 自己那道 isScanning 闸门会挡掉重入，
+                // 这里不另判，免得两处各有一套「能不能扫」的规矩
+                await self.refresh()
+            }
+        }
     }
 
     /// 聚合本机记录 → 写入自己的设备档案 → 读回全部设备档案 → 合并。
