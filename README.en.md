@@ -106,7 +106,7 @@ as `Unpriced` rather than `$0.00`.
 
 **Engineering.** Parse results are cached by `(path, size, mtime)` so a refresh re-parses only changed files;
 every number in the UI has a machine-readable outlet (`--dump` / `--menu` / `--retention` / `--export`), the
-layout has a set of offscreen snapshots (`--render`), and the accounting has 225 assertions (`--selftest`).
+layout has a set of offscreen snapshots (`--render`), and the accounting has 236 assertions (`--selftest`).
 
 ## Privacy
 
@@ -231,6 +231,11 @@ launch (so it starts out `.regular`), and "menu-bar-only" only ever arises from 
 runtime transition; a static declaration would only add a flip at launch plus two known pitfalls. The reasoning
 lives at the top of `ActivationPolicyController`.
 
+**⌘Q does not quit the app — it closes the front window** (quitting is what the power button in the panel footer is
+for). A menu-bar utility that gets killed by a stray ⌘Q loses whatever it was keeping an eye on. Which path the main
+window takes once closed is decided by the "keep running after closing the main window" toggle above. The app menu
+keeps a "Quit" item without a shortcut as a fallback entry point.
+
 One residual risk, stated plainly: on macOS 26 and later a user can remove this app's icon from
 System Settings → Menu Bar, and the app can only read its own preference, not that system-side state — it will
 wrongly conclude it may drop to menu-bar-only. Reopening the app from Applications recovers it (via
@@ -295,7 +300,7 @@ APP="build/Build/Products/Release/AI Usage.app/Contents/MacOS/AI Usage"
 | `--dump [days]` | Prints the summary, 90 days by default. **Pass a bare integer**: `--dump 7`. `--dump "7 days"` doesn't error but **silently does nothing** — it parses with `Int($0)` and falls back to 90 days when that fails |
 | `--menu` | Menu bar summary (fixed windows: today / this month / last 7 days), plus a final `label:` line — the string actually shown in the menu bar, assembled from your configuration. Matching numbers don't mean the string is right: defects like `今日 $ $16.86` are only visible once the assembled string is printed |
 | `--retention` | Retention table. Prints the `cleanupPeriodDays` value **only** and touches nothing else in `~/.claude/settings.json` |
-| `--selftest` | 225 assertions; non-zero exit on failure |
+| `--selftest` | 236 assertions; non-zero exit on failure |
 | `--render <dir>` | Offscreen snapshots (views backed by AppKit — `TextEditor`, `Form`, `Menu` — go through a real `NSWindow`, see `RenderHarness.captureWindow`; views whose height follows their content measure themselves, see `captureFitting`) |
 | `--bench` | Median rasterization time for the main window |
 | `--export <dir> [csv\|tsv\|json] [device\|model\|day]` | Export in three formats per breakdown, byte-for-byte checkable |

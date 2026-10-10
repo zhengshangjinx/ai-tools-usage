@@ -105,6 +105,18 @@ struct AIUsageApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: WindowFrameKeeper.designSize.width, height: WindowFrameKeeper.designSize.height)
+        // ⌘Q 不退出 App，只关掉当前窗口 —— 拦截本身在 `QuitShortcut` 里（那里也写了为什么非要用
+        // 事件监视器）。这里换掉系统那一项只为一件事：**别让菜单撒谎**。原样留着的话，
+        // 菜单上写着「退出 AI 用量统计 ⌘Q」，按下去却是关窗口。顺序也照着这个意思排：
+        // ⌘Q 挂在「关闭窗口」上，「退出」不带快捷键 —— 它只是面板页脚那枚电源按钮的备用入口
+        // （calendar-plus 也是这么留的，免得哪天面板进不去了连个出口都没有）。
+        .commands {
+            CommandGroup(replacing: .appTermination) {
+                Button("关闭窗口") { QuitShortcut.closeFrontWindow() }
+                    .keyboardShortcut("q", modifiers: .command)
+                Button("退出 AI 用量统计") { NSApp.terminate(nil) }
+            }
+        }
 
         // 常驻菜单栏。`isInserted` 直接绑配置里的开关：关掉只是不显示图标。
         // Dock 图标是另一套逻辑：**屏幕上没有真窗口时 App 会退成纯状态栏**（Dock 图标与菜单栏一起收掉），
@@ -154,6 +166,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 自测放在最前面、**同步**跑完就 exit：这时 SwiftUI 还没建窗口，
         // 跑一遍断言不会在屏幕上闪出主窗口。它不联网、不碰扫描缓存，见 SelfTest 顶部那段红线。
         if SelfTest.isRequested { SelfTest.runAndExit() }
+        // ⌘Q 的落点在这里定下来（关当前窗口，不退 App）。挂得比下面那几个出口早：
+        // 那些出口跑完就 `exit`，而这一条要在正常的界面上生效。
+        QuitShortcut.install()
         let dir = RenderHarness.outputDirectory
         let export = ExportHarness.request
         guard dir != nil || RenderHarness.benchMode || export != nil else { return }

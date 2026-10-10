@@ -106,7 +106,7 @@ processed = uncached input + cache read + cache write + output
 
 **工程。** 解析结果按 `(path, size, mtime)` 缓存，刷新只重解析变过的文件；
 界面上的每个数都有一个机器可读的出口（`--dump` / `--menu` / `--retention` / `--export`），
-排版有一组离屏快照核对（`--render`），口径有一份 225 条断言的自测（`--selftest`）。
+排版有一组离屏快照核对（`--render`），口径有一份 236 条断言的自测（`--selftest`）。
 
 ## 隐私
 
@@ -226,6 +226,10 @@ prerelease 上时它会直接 404。
 本 App 启动就有窗口（出生即 `.regular`），「纯状态栏」只在关掉最后一个窗口之后出现，那是运行期切换的活，
 静态声明只会让启动多一次翻转还搭上两个已知坑，理由写在 `ActivationPolicyController` 开头。
 
+**⌘Q 不退出 App，只关掉当前窗口**（面板页脚那枚电源按钮才是退出）。理由是常驻状态栏的工具被 ⌘Q
+误杀一次，提醒就跟着没了；关掉主窗口之后走哪条路由上面那个「关闭主窗口后保留在菜单栏」说了算。
+菜单里另留了一项不带快捷键的「退出」作为备用入口。
+
 一个残余风险，如实写在这里：macOS 26 起用户可以在「系统设置 → 菜单栏」里关掉本 App 的图标，
 而本 App 只能读自己的配置、读不到系统那一侧的状态，会误判成「可以退成纯状态栏」。
 这时从「应用程序」里重新打开一次即可（走 `applicationShouldHandleReopen`）。
@@ -296,7 +300,7 @@ APP="build/Build/Products/Release/AI Usage.app/Contents/MacOS/AI Usage"
 | `--dump [天数]` | 打印汇总，默认 90 天。**天数写裸整数**：`--dump 7`。写成 `--dump "7 days"` 不报错但**不生效** —— 解析用的是 `Int($0)`，解析不出来就一声不响地退回 90 天 |
 | `--menu` | 菜单栏摘要（固定窗口：今日 / 本月 / 近 7 天），末尾另打一行 `label:` —— 那是菜单栏上**真正显示的那行字**（由你的配置拼出来）。数字对得上不等于那行字对：「今日 $ $16.86」这种拼写毛病只有把拼好的串打出来才看得见 |
 | `--retention` | 留存对照表。只打印 `cleanupPeriodDays` 这**一个**值，不碰 `~/.claude/settings.json` 里的其它内容 |
-| `--selftest` | 225 条断言，失败退出码非 0 |
+| `--selftest` | 236 条断言，失败退出码非 0 |
 | `--render <目录>` | 离屏快照（`TextEditor` / `Form` / `Menu` 这类 AppKit 承载的视图走真实 `NSWindow` 抓图，见 `RenderHarness.captureWindow`；高度由内容决定的视图自己量，见 `captureFitting`） |
 | `--bench` | 主界面光栅化耗时中位数 |
 | `--export <目录> [csv\|tsv\|json] [device\|model\|day]` | 按维度导出三种格式，逐字节可核对 |

@@ -28,12 +28,14 @@ enum ActivationPolicyController {
         var canBecomeMain = false
     }
 
+    static func snapshot(of window: NSWindow) -> WindowSnapshot {
+        WindowSnapshot(isVisible: window.isVisible,
+                       isMiniaturized: window.isMiniaturized,
+                       canBecomeMain: window.canBecomeMain)
+    }
+
     static func snapshots(of windows: [NSWindow]) -> [WindowSnapshot] {
-        windows.map {
-            WindowSnapshot(isVisible: $0.isVisible,
-                           isMiniaturized: $0.isMiniaturized,
-                           canBecomeMain: $0.canBecomeMain)
-        }
+        windows.map(snapshot(of:))
     }
 
     /// 屏幕上还有没有「真窗口」。
@@ -73,6 +75,19 @@ enum ActivationPolicyController {
         guard isMainWindow else { return .refresh }
         guard keepRunning else { return .terminate }
         return hasMenuBarIcon ? .refresh : .stayInDock
+    }
+
+    /// ⌘Q 的落点判据：这个窗口该不该被 ⌘Q 关掉。
+    ///
+    /// 判据就是「它是不是一个真窗口」，与 `hasRealWindow` 共用同一条定义（`canBecomeMain` 那一条）——
+    /// 菜单栏面板、弹出层、tooltip 都不是，⌘Q 落在它们上面什么都不做。
+    ///
+    /// **返回值里刻意没有「退出 App」这一档**：⌘Q 把状态栏一起收掉，正是用户报上来的毛病。
+    /// 关掉主窗口之后走哪条路（留在菜单栏还是退出）由 `closeOutcome` 说了算，
+    /// 这里只负责选出「关哪个窗口」。退出整个 App 只剩两个入口：
+    /// 菜单栏面板页脚那枚电源按钮、App 菜单里的「退出」（见 `QuitShortcut`）。
+    static func closesOnQuitKey(_ window: WindowSnapshot) -> Bool {
+        hasRealWindow([window])
     }
 
     // MARK: - 运行期

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// `--selftest`：一套不需要窗口、不联网、不碰用户数据的断言。
@@ -720,7 +721,45 @@ enum SelfTest {
             }
         }
 
+        // ⌘Q 的落点：关掉当前窗口，**不退出 App**（用户报上来的毛病：一下 ⌘Q 连状态栏一起没了）
+        expect("⌘Q 关主窗口", ActivationPolicyController.closesOnQuitKey(main))
+        let settings = Snap(isVisible: true, isMiniaturized: false, canBecomeMain: true)
+        expect("⌘Q 关设置窗口（它也是真窗口）", ActivationPolicyController.closesOnQuitKey(settings))
+        expect("⌘Q 不关藏起来的窗口", !ActivationPolicyController.closesOnQuitKey(hidden),
+               "藏起来的窗口不可能是 key window，判据跟着 `canBecomeMain` 走就好，别再放宽")
+        expect("**⌘Q 在菜单栏面板上什么都不做**", !ActivationPolicyController.closesOnQuitKey(panel),
+               "漏掉这条：判据一旦放宽成「只要 isVisible」，点开面板按 ⌘Q 就会误关一次窗口")
+
         testBehaviorSettings()
+        testQuitKeyShape()
+    }
+
+    /// ⌘Q 的按键形状。
+    ///
+    /// 用真的 `NSEvent` 构造，不把判据在这里重写一遍 —— 重写等于测了个同义反复。
+    /// 形状判错有两头，两头都只在按键那一刻才看得见：
+    /// 一头是**漏**（⌘Q 被放行回系统那套 → 状态栏又被一起收掉，本次修的就是这个），
+    /// 另一头是**吞**（⌘⇧Q 也被吃掉 → 那个组合在别处的用途失灵）。
+    private static func testQuitKeyShape() {
+        func key(_ chars: String, _ flags: NSEvent.ModifierFlags) -> NSEvent? {
+            NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
+                             windowNumber: 0, context: nil, characters: chars,
+                             charactersIgnoringModifiers: chars, isARepeat: false, keyCode: 12)
+        }
+
+        expect("⌘Q 被拦下", key("q", [.command]).map(QuitShortcut.isQuitKey) == true)
+        // 大写锁定开着时 `charactersIgnoringModifiers` 给的是大写 Q，而 caps lock 也在修饰键集合里。
+        // 这两件事都必须被吸收掉，否则「大写锁定一开，⌘Q 就时灵时不灵」。
+        expect("大写锁定开着（字符是大写 Q）照样认",
+               key("Q", [.command, .capsLock]).map(QuitShortcut.isQuitKey) == true)
+
+        for (name, flags) in [("⌘⇧Q", NSEvent.ModifierFlags([.command, .shift])),
+                              ("⌘⌥Q", NSEvent.ModifierFlags([.command, .option])),
+                              ("⌘⌃Q", NSEvent.ModifierFlags([.command, .control])),
+                              ("光按 Q", NSEvent.ModifierFlags([]))] {
+            expect("\(name) 放行（不是「退出」的写法）", key("q", flags).map(QuitShortcut.isQuitKey) == false)
+        }
+        expect("⌘W 之类的别的键放行", key("w", [.command]).map(QuitShortcut.isQuitKey) == false)
     }
 
     /// 关窗行为这个设置项的读写。
